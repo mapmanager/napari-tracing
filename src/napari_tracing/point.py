@@ -37,9 +37,6 @@ class Point:
     def reset(self):
         self.color = WHITE
 
-    def make_start(self):
-        self.color = ORANGE
-
     def make_closed(self):
         self.color = RED
 
@@ -48,9 +45,6 @@ class Point:
 
     def make_barrier(self):
         self.color = BLACK
-
-    def make_end(self):
-        self.color = TURQUOISE
 
     def make_path(self):
         self.color = PURPLE
