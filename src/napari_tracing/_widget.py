@@ -1,3 +1,7 @@
+"""
+Only add points in the layer when path has been found
+Do color changes only for purple path, don't close/open -> color change
+"""
 import warnings
 from collections import defaultdict
 from queue import PriorityQueue
@@ -20,7 +24,8 @@ PURPLE = np.array([0.5, 0, 0.5, 1])
 ORANGE = np.array([1, 0.65, 0, 1])
 TURQUOISE = np.array([0.25, 0.88, 0.82, 1])
 
-STEP_SIZE = 0.5
+STEP_SIZE = 1
+ERROR = 0.5
 
 
 class TracerWidget(QWidget):
@@ -122,7 +127,7 @@ class TracerWidget(QWidget):
             neighbors.append((y - STEP_SIZE, x))
 
         # bottom
-        if y < y_max - 0.5:
+        if y < y_max - ERROR:
             neighbors.append((y + STEP_SIZE, x))
 
         # left
@@ -130,7 +135,7 @@ class TracerWidget(QWidget):
             neighbors.append((y, x - STEP_SIZE))
 
         # right
-        if x < x_max - 0.5:
+        if x < x_max - ERROR:
             neighbors.append((y, x + STEP_SIZE))
 
         logger.info(f"found {len(neighbors)} neighbors")
@@ -149,7 +154,7 @@ class TracerWidget(QWidget):
         count = 0
         open_set = PriorityQueue()
         open_set.put(
-            (0, count, self.start, self.start_idx)
+            (0, count, self.start)
         )  # distance, time of occurrence, point tuple
         came_from = {}
         g_score = defaultdict(self.default_value)
@@ -162,8 +167,7 @@ class TracerWidget(QWidget):
         while not open_set.empty():
             element = open_set.get()
             current = element[2]
-            index = element[3]
-            logger.info(f"inside while. current: {current} at index {index}")
+            logger.info(f"inside while. current: {current}")
             open_set_hash.remove(current)
 
             # if current == self.end:
@@ -181,34 +185,33 @@ class TracerWidget(QWidget):
                 temp_g_score = g_score[current] + STEP_SIZE
 
                 if temp_g_score < g_score[neighbor]:
-                    came_from[neighbor] = (current, index)
+                    came_from[neighbor] = current
                     g_score[neighbor] = temp_g_score
                     f_score[neighbor] = temp_g_score + self.calculate_h_score(
                         neighbor, self.end
                     )
                     if neighbor not in open_set_hash:
                         count += 1
-                        index = self.add_point(
-                            np.array(neighbor), GREEN
-                        )  # make open
-                        open_set.put(
-                            (f_score[neighbor], count, neighbor, index)
-                        )
+                        # index = self.add_point(
+                        #     np.array(neighbor), GREEN
+                        # )  # make open
+                        open_set.put((f_score[neighbor], count, neighbor))
                         open_set_hash.add(neighbor)
 
             # draw()
 
-            if current != self.start:
-                # self.add_point(np.array(current), RED) # make closed
-                # self.add_point(np.array(current)) # make closed
-                self.change_color(index, RED)
+            # if current != self.start:
+            #     # self.add_point(np.array(current), RED) # make closed
+            #     # self.add_point(np.array(current)) # make closed
+            #     self.change_color(index, RED)
 
         logger.info("Done tracing")
         return False
 
-    def add_point(
-        self, point: np.ndarray, color: Optional[np.ndarray] = None
-    ) -> int:
+    def add_point(self, point: np.ndarray, color: Optional[np.ndarray] = None):
+        """
+        add a new point in the napari layer
+        """
         self.layer_data = np.append(self.layer_data, np.array([point]), axis=0)
         self.layer.data = self.layer_data
         index = len(self.layer_data) - 1
@@ -217,9 +220,11 @@ class TracerWidget(QWidget):
             self.change_color(index, color)
 
         self.layer.refresh()
-        return index
 
     def change_color(self, idx: int, color: np.array) -> None:
+        """
+        change the color of a point in the layer
+        """
         layer_colors = self.layer._face.colors
         layer_colors[idx] = color
         self.layer._face.current_color = WHITE
@@ -230,8 +235,8 @@ class TracerWidget(QWidget):
         Draws final path by changing color of points in the path to purple.
         """
         while current in came_from:
-            current, index = came_from[current]
-            self.change_color(index, PURPLE)
+            self.add_point(np.array(current), PURPLE)
+            current = came_from[current]
 
     def find_active_layers(self) -> Optional[Layer]:
         """
