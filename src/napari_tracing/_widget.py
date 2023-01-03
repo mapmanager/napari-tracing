@@ -1,6 +1,10 @@
 """
-Only add points in the layer when path has been found
-Do color changes only for purple path, don't close/open -> color change
+TODO:
+GUI related:
+- Read point size (for path width) from a textbox?
+- Save trace button?
+- reset button?
+- restore edge color and point size after plotting complete to prev color/size
 """
 import warnings
 from collections import defaultdict
