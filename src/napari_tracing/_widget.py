@@ -1,6 +1,7 @@
 """
 TODO:
 GUI related:
+- center the gui layout on the screen
 - Reset points layer by removing start and end points when Cancel is clicked
 - Read point size (for path width) from a textbox?
 - Read trace path color and size from input
@@ -22,13 +23,19 @@ from typing import List, Optional  # noqa
 
 import napari  # noqa
 import numpy as np  # noqa
-from algorithm import AStarSearch  # noqa
-from brightest_path_lib.algorithm import AStarSearch  # noqa
+from algorithm import AStarSearch, NBAStarSearch  # noqa
+from brightest_path_lib.algorithm import AStarSearch, NBAStarSearch  # noqa
 from napari.layers import Layer  # noqa
 from napari.qt.threading import thread_worker  # noqa
 from napari.utils.events import Event  # noqa
 from napari.viewer import Viewer  # noqa
-from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget  # noqa
+from qtpy.QtWidgets import (  # noqa
+    QComboBox,
+    QHBoxLayout,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ._logger import logger  # noqa
 from .utils import Utils  # noqa
@@ -58,14 +65,16 @@ class TracerWidget(QWidget):
 
         self.viewer = viewer
         self.layer = None
-        self._points_layer_data = np.array([])
+        self.terminal_points_layer = None
+        self.tracing_result_layer = None
+        self._terminal_points_layer_data = np.array([])
         self._image_layer_data = np.array([])
         self.start_point = None
         self.goal_point = None
         self.start_idx = -1
         self.end_idx = -1
         self.worker = None
-
+        self.tracing_algorithm_name = "A* Search"
         self.configure_gui()
 
         if layer:
@@ -92,16 +101,34 @@ class TracerWidget(QWidget):
         """
         Configure a QHBoxLayout to hold the trace and cancel buttons.
         """
-        layout = QHBoxLayout()
+        main_layout = QVBoxLayout()
+
+        combo_box = QComboBox(self)
+        combo_box.addItem("A* Search")
+        combo_box.addItem("NBA* Search")
+        combo_box.activated[str].connect(self.set_algorithm_for_tracing)
+
+        main_layout.addWidget(combo_box)
+
+        button_layout = QHBoxLayout()
         trace_button = QPushButton("Trace")
         trace_button.clicked.connect(self.trace_brightest_path)
-        layout.addWidget(trace_button)
+        button_layout.addWidget(trace_button)
 
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.cancel_tracing)
-        layout.addWidget(cancel_button)
+        button_layout.addWidget(cancel_button)
 
-        self.setLayout(layout)
+        reset_button = QPushButton("Reset")
+        reset_button.clicked.connect(self.reset)
+        button_layout.addWidget(reset_button)
+
+        main_layout.addLayout(button_layout)
+        self.setLayout(main_layout)
+
+    def set_algorithm_for_tracing(self, text):
+        logger.info(f"using {text} as tracing algorithm")
+        self.tracing_algorithm_name = text
 
     def find_active_layers(self) -> Optional[Layer]:
         """
@@ -124,7 +151,10 @@ class TracerWidget(QWidget):
             if isinstance(self.layer, napari.layers.points.points.Points):
                 self.layer.events.data.disconnect(self.slot_points_data_change)
                 # self.layer.events.highlight.disconnect(self.slot_user_selected_point)
-                self._points_layer_data = np.array([])
+
+                if self.terminal_points_layer is None:
+                    self.terminal_points_layer = None
+                    self._terminal_points_layer_data = np.array([])
 
         self.layer = layer
         logger.info(f"Found new layer of type {type(self.layer)}")
@@ -133,7 +163,11 @@ class TracerWidget(QWidget):
             # if "data" in vars(layer).keys() and layer.data.any():
             if "_data" in vars(layer).keys() and layer.data.any():
                 logger.info("Getting points layer data")
-                self._points_layer_data = layer.data.copy()
+
+                if self.terminal_points_layer is None:
+                    self.terminal_points_layer = layer
+                    self._terminal_points_layer_data = layer.data.copy()
+
             self.layer.events.data.connect(self.slot_points_data_change)
 
         elif isinstance(self.layer, napari.layers.image.image.Image):
@@ -151,15 +185,15 @@ class TracerWidget(QWidget):
         logger.info("Inside slot_points_data_change")
 
         if Utils.are_sets_equal(
-            event.source.selected_data, self._points_layer_data
+            event.source.selected_data, self._terminal_points_layer_data
         ):
             # no change
             return
 
-        if len(event.source.data) > len(self._points_layer_data):
+        if len(event.source.data) > len(self._terminal_points_layer_data):
             logger.info("new point added")
             idx, point = Utils.get_diff(
-                event.source.data, self._points_layer_data
+                event.source.data, self._terminal_points_layer_data
             )
             # point = tuple(map(int, tuple(point[0])))
             point = tuple(point[0])
@@ -176,12 +210,12 @@ class TracerWidget(QWidget):
                 self.goal_point = point
                 self.change_color(idx, TURQUOISE)
 
-            self._points_layer_data = event.source.data.copy()
+            self._terminal_points_layer_data = event.source.data.copy()
 
-        elif len(event.source.data) < len(self._points_layer_data):
+        elif len(event.source.data) < len(self._terminal_points_layer_data):
             logger.info("point is deleted")
             idx, point = Utils.get_diff(
-                self._points_layer_data, event.source.data.copy()
+                self._terminal_points_layer_data, event.source.data.copy()
             )
             point = tuple(point[0])
 
@@ -193,7 +227,7 @@ class TracerWidget(QWidget):
                 logger.info("resetting end since it was deleted")
                 self.goal_point = None
 
-            self._points_layer_data = event.source.data.copy()
+            self._terminal_points_layer_data = event.source.data.copy()
 
     def slot_insert_layer(self, event: Event) -> None:
         """
@@ -237,10 +271,14 @@ class TracerWidget(QWidget):
         if len(self._image_layer_data) == 0:
             logger.info("No image data to trace")
             return
-
-        tracing_algorithm = AStarSearch(
-            self._image_layer_data, self.start_point, self.goal_point
-        )
+        if self.tracing_algorithm_name == "NBA* Search":
+            tracing_algorithm = NBAStarSearch(
+                self._image_layer_data, self.start_point, self.goal_point
+            )
+        else:
+            tracing_algorithm = AStarSearch(
+                self._image_layer_data, self.start_point, self.goal_point
+            )
 
         result = tracing_algorithm.search()
         logger.info(f"Completed tracing. Found path of length {len(result)}")
@@ -256,8 +294,9 @@ class TracerWidget(QWidget):
 
     def plot_brightest_path(self, points: List[np.ndarray]):
         logger.info("Plotting brightest path...")
-        self.viewer.add_points(
+        self.tracing_result_layer = self.viewer.add_points(
             points,
+            name="Tracing",
             size=1,
             edge_width=1,
             face_color="green",
@@ -271,20 +310,56 @@ class TracerWidget(QWidget):
             self.worker.quit()
             self.worker = None
 
+    def reset(self):
+        """
+        reset the UI changes that were made for tracing
+        """
+
+        # clear the start and end points
+        self.start_point = None
+        self.goal_point = None
+
+        if self.terminal_points_layer is not None:
+            logger.info(
+                f"Resetting the points layer {self.terminal_points_layer}"
+            )
+            point_indices_to_delete = [
+                x for x in range(len(self.terminal_points_layer.data))
+            ]
+            logger.info(
+                f"Deleting points at these indices: {point_indices_to_delete}"
+            )
+            self.terminal_points_layer.data = np.delete(
+                self.terminal_points_layer.data, point_indices_to_delete, 0
+            )
+            self.terminal_points_layer.refresh()
+            self._terminal_points_layer_data = np.array([])
+
+        # remove points layer added for result
+        if self.tracing_result_layer is not None:
+            self.viewer.layers.remove("Tracing")
+            self.tracing_result_layer = None
+
     def add_point(self, point: np.ndarray, color: Optional[np.ndarray] = None):
         """
         add a new point in the napari layer
         """
-        self._points_layer_data = np.append(
-            self._points_layer_data, np.array([point]), axis=0
+        self._terminal_points_layer_data = np.append(
+            self._terminal_points_layer_data, np.array([point]), axis=0
         )
-        self.layer.data = self._points_layer_data
-        index = len(self._points_layer_data) - 1
+        self.layer.data = self._terminal_points_layer_data
+        index = len(self._terminal_points_layer_data) - 1
 
         if color is not None:
             self.change_color(index, color)
 
         self.layer.refresh()
+
+    # def delete_point(self, point: np.ndarray):
+    #     """
+    #     delete a point
+    #     """
+    #     pass
 
     def change_color(self, idx: int, color: np.array) -> None:
         """
