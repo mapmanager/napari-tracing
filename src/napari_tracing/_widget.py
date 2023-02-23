@@ -1,12 +1,18 @@
 """
 TODO:
+- Add a points layer for the terminal points when the plugin is initialized
+- Store a reference to this points layer as self.SOMETHING
+- Store the data of this points layer as self.SOMETHING_data
+- Listen to this points layer in a different way (different methods) compared
+to the results points layer. Maybe don't listen to results points layer at all.
+
 GUI related:
-- center the gui layout on the screen
 - Reset points layer by removing start and end points when Cancel is clicked
+- Reset button
+- Vertically center the gui layout on the screen
 - Read point size (for path width) from a textbox?
 - Read trace path color and size from input
-- Save trace button?
-- reset button?
+- Save trace button
 - restore edge color and point size after plotting complete to prev color/size
 """
 import sys
@@ -47,9 +53,6 @@ BLACK = np.array([0, 0, 0, 1])
 PURPLE = np.array([0.5, 0, 0.5, 1])
 ORANGE = np.array([1, 0.65, 0, 1])
 TURQUOISE = np.array([0.25, 0.88, 0.82, 1])
-
-STEP_SIZE = 1
-ERROR = 0.5
 
 
 class TracerWidget(QWidget):
