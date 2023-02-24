@@ -15,6 +15,7 @@ GUI related:
 - Save trace button
 - restore edge color and point size after plotting complete to prev color/size
 """
+import csv
 import sys
 
 sys.path.append("/Users/vasudhajha/Documents/mapmanager/brightest-path-lib")
@@ -46,6 +47,7 @@ from qtpy.QtWidgets import (  # noqa
 
 from ._dialog_widget import SaveTracingWidget  # noqa
 from ._logger import logger  # noqa
+from .path import PathModel  # noqa
 from .utils import Utils  # noqa
 
 RED = np.array([1, 0, 0, 1])
@@ -81,7 +83,7 @@ class TracerWidget(QWidget):
         self.worker = None
         self.tracing_algorithm_name = "A* Search"
         self.save_tracing_widget = SaveTracingWidget()
-        self.all_tracing_results = []
+        self.paths: List[PathModel] = []
         self.current_tracing_result = None
         self.configure_gui()
 
@@ -324,12 +326,32 @@ class TracerWidget(QWidget):
         Saves the result of tracings in a CSV file
         """
         logger.info("Saving tracing")
-        self.all_tracing_results.append(self.current_tracing_result)
+        path = PathModel(
+            self.start_point, self.goal_point, self.current_tracing_result
+        )
+        self.paths.append(path)
         fileName = QFileDialog.getSaveFileName(
             self, "Save Tracing As", "", filter="*.csv"
         )
         if fileName:
             logger.info(f"Saving file as {fileName[0]}")
+            with open(fileName[0], "w") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    ["Start Point", "Goal Point", "Brightest Path"]
+                )
+                writer.writerow(
+                    [
+                        self.start_point,
+                        self.goal_point,
+                        self.current_tracing_result,
+                    ]
+                )
+
+            logger.info("Resetting start and goal point variables")
+
+        self.start_point = None
+        self.goal_point = None
 
     def discard_tracing(self):
         """
