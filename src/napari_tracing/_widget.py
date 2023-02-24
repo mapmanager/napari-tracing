@@ -43,6 +43,7 @@ from qtpy.QtWidgets import (  # noqa
     QWidget,
 )
 
+from ._dialog_widget import SaveTracingWidget  # noqa
 from ._logger import logger  # noqa
 from .utils import Utils  # noqa
 
@@ -78,6 +79,7 @@ class TracerWidget(QWidget):
         self.end_idx = -1
         self.worker = None
         self.tracing_algorithm_name = "A* Search"
+        self.save_tracing_widget = SaveTracingWidget()
         self.configure_gui()
 
         if layer:
@@ -100,6 +102,9 @@ class TracerWidget(QWidget):
             self.slot_select_layer
         )
 
+        self.save_tracing_widget.saveTracing.connect(self.save_tracing)
+        self.save_tracing_widget.discardTracing.connect(self.discard_tracing)
+
     def configure_gui(self) -> None:
         """
         Configure a QHBoxLayout to hold the trace and cancel buttons.
@@ -121,10 +126,6 @@ class TracerWidget(QWidget):
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.cancel_tracing)
         button_layout.addWidget(cancel_button)
-
-        reset_button = QPushButton("Reset")
-        reset_button.clicked.connect(self.reset)
-        button_layout.addWidget(reset_button)
 
         main_layout.addLayout(button_layout)
         self.setLayout(main_layout)
@@ -305,6 +306,7 @@ class TracerWidget(QWidget):
             face_color="green",
             edge_color="green",
         )
+        self.save_tracing_widget.show()
 
     def cancel_tracing(self):
         """Cancel brightest path tracing"""
@@ -313,35 +315,50 @@ class TracerWidget(QWidget):
             self.worker.quit()
             self.worker = None
 
-    def reset(self):
+    def save_tracing(self):
         """
-        reset the UI changes that were made for tracing
+        Saves the result of a tracing in a CSV file format
         """
+        logger.info("Saving tracing")
 
-        # clear the start and end points
-        self.start_point = None
-        self.goal_point = None
-
-        if self.terminal_points_layer is not None:
-            logger.info(
-                f"Resetting the points layer {self.terminal_points_layer}"
-            )
-            point_indices_to_delete = [
-                x for x in range(len(self.terminal_points_layer.data))
-            ]
-            logger.info(
-                f"Deleting points at these indices: {point_indices_to_delete}"
-            )
-            self.terminal_points_layer.data = np.delete(
-                self.terminal_points_layer.data, point_indices_to_delete, 0
-            )
-            self.terminal_points_layer.refresh()
-            self._terminal_points_layer_data = np.array([])
-
-        # remove points layer added for result
+    def discard_tracing(self):
+        """
+        Discard the result of a tracing
+        """
+        logger.info("Discard tracing")
         if self.tracing_result_layer is not None:
             self.viewer.layers.remove("Tracing")
             self.tracing_result_layer = None
+
+    # def reset(self):
+    #     """
+    #     reset the UI changes that were made for tracing
+    #     """
+
+    #     # clear the start and end points
+    #     self.start_point = None
+    #     self.goal_point = None
+
+    #     if self.terminal_points_layer is not None:
+    #         logger.info(
+    #             f"Resetting the points layer {self.terminal_points_layer}"
+    #         )
+    #         point_indices_to_delete = [
+    #             x for x in range(len(self.terminal_points_layer.data))
+    #         ]
+    #         logger.info(
+    #             f"Deleting points at these indices: {point_indices_to_delete}" # noqa
+    #         )
+    #         self.terminal_points_layer.data = np.delete(
+    #             self.terminal_points_layer.data, point_indices_to_delete, 0
+    #         )
+    #         self.terminal_points_layer.refresh()
+    #         self._terminal_points_layer_data = np.array([])
+
+    #     # remove points layer added for result
+    #     if self.tracing_result_layer is not None:
+    #         self.viewer.layers.remove("Tracing")
+    #         self.tracing_result_layer = None
 
     def add_point(self, point: np.ndarray, color: Optional[np.ndarray] = None):
         """
