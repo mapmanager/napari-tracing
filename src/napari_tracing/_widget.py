@@ -37,6 +37,7 @@ from napari.utils.events import Event  # noqa
 from napari.viewer import Viewer  # noqa
 from qtpy.QtWidgets import (  # noqa
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QPushButton,
     QVBoxLayout,
@@ -80,6 +81,8 @@ class TracerWidget(QWidget):
         self.worker = None
         self.tracing_algorithm_name = "A* Search"
         self.save_tracing_widget = SaveTracingWidget()
+        self.all_tracing_results = []
+        self.current_tracing_result = None
         self.configure_gui()
 
         if layer:
@@ -285,6 +288,7 @@ class TracerWidget(QWidget):
             )
 
         result = tracing_algorithm.search()
+        self.current_tracing_result = result
         logger.info(f"Completed tracing. Found path of length {len(result)}")
         return result
 
@@ -317,9 +321,15 @@ class TracerWidget(QWidget):
 
     def save_tracing(self):
         """
-        Saves the result of a tracing in a CSV file format
+        Saves the result of tracings in a CSV file
         """
         logger.info("Saving tracing")
+        self.all_tracing_results.append(self.current_tracing_result)
+        fileName = QFileDialog.getSaveFileName(
+            self, "Save Tracing As", "", filter="*.csv"
+        )
+        if fileName:
+            logger.info(f"Saving file as {fileName[0]}")
 
     def discard_tracing(self):
         """
