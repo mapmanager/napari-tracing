@@ -1,21 +1,13 @@
 """
 TODO:
-- Add a points layer for the terminal points when the plugin is initialized
-- Store a reference to this points layer as self.SOMETHING
-- Store the data of this points layer as self.SOMETHING_data
-- Listen to this points layer in a different way (different methods) compared
-to the results points layer. Maybe don't listen to results points layer at all.
-
 GUI related:
-- Reset points layer by removing start and end points when Cancel is clicked
-- Reset button
 - Vertically center the gui layout on the screen
 - Read point size (for path width) from a textbox?
 - Read trace path color and size from input
-- Save trace button
 - restore edge color and point size after plotting complete to prev color/size
 """
 import csv
+import os
 import sys
 
 sys.path.append("/Users/vasudhajha/Documents/mapmanager/brightest-path-lib")
@@ -156,28 +148,29 @@ class TracerWidget(QWidget):
                 Args:
                         layer: Layer (Layer to connect to.)
         """
-        if self.layer:
-            if isinstance(self.layer, napari.layers.points.points.Points):
-                self.layer.events.data.disconnect(self.slot_points_data_change)
-                # self.layer.events.highlight.disconnect(self.slot_user_selected_point)
-
-                if self.terminal_points_layer is None:
-                    self.terminal_points_layer = None
-                    self._terminal_points_layer_data = np.array([])
-
         self.layer = layer
         logger.info(f"Found new layer of type {type(self.layer)}")
 
         if isinstance(self.layer, napari.layers.points.points.Points):
+            logger.info("Checking if layer has _data field and any data")
+            has_data_field = "_data" in vars(layer).keys()
+            # has_data = layer.data.any()
+
+            logger.info(f"_data in vars(layer).keys(): {has_data_field}")
+            logger.info(f"layer.data.any(): {layer.data.any()}")
+
             # if "data" in vars(layer).keys() and layer.data.any():
-            if "_data" in vars(layer).keys() and layer.data.any():
+            # if has_data_field and has_data:
+            if has_data_field:
                 logger.info("Getting points layer data")
 
                 if self.terminal_points_layer is None:
                     self.terminal_points_layer = layer
                     self._terminal_points_layer_data = layer.data.copy()
-
-            self.layer.events.data.connect(self.slot_points_data_change)
+                    self.terminal_points_layer.events.data.connect(
+                        self.slot_points_data_change
+                    )
+            # self.layer.events.data.connect(self.slot_points_data_change)
 
         elif isinstance(self.layer, napari.layers.image.image.Image):
             if "_data" in vars(layer).keys() and layer.data.any():
@@ -192,6 +185,8 @@ class TracerWidget(QWidget):
         based on point adding/deletion
         """
         logger.info("Inside slot_points_data_change")
+        if event.source != self.terminal_points_layer:
+            return
 
         if Utils.are_sets_equal(
             event.source.selected_data, self._terminal_points_layer_data
@@ -260,6 +255,12 @@ class TracerWidget(QWidget):
             event (Event): event.type == 'removed'
         """
         logger.info(f'Removed layer "{event.source}"')
+        if event.source == self.terminal_points_layer:
+            self.start_point = None
+            self.goal_point = None
+            self._terminal_points_layer_data = np.array([])
+            self.terminal_points_layer = None
+
         currently_selected_layer = self.find_active_layers()
         if currently_selected_layer and currently_selected_layer != self.layer:
             self.connect_layer(currently_selected_layer)
@@ -304,14 +305,22 @@ class TracerWidget(QWidget):
 
     def plot_brightest_path(self, points: List[np.ndarray]):
         logger.info("Plotting brightest path...")
-        self.tracing_result_layer = self.viewer.add_points(
-            points,
-            name="Tracing",
-            size=1,
-            edge_width=1,
-            face_color="green",
-            edge_color="green",
-        )
+        if not self.tracing_result_layer:
+            self.tracing_result_layer = self.viewer.add_points(
+                points,
+                name="Tracing",
+                size=1,
+                edge_width=1,
+                face_color="green",
+                edge_color="green",
+            )
+        else:
+            # append the points numpy array to the data in tracing_result_layer
+            self.tracing_result_layer.data = np.append(
+                self.tracing_result_layer.data, points, axis=0
+            )
+            self.tracing_result_layer.refresh()
+
         self.save_tracing_widget.show()
 
     def cancel_tracing(self):
@@ -335,11 +344,19 @@ class TracerWidget(QWidget):
         )
         if fileName:
             logger.info(f"Saving file as {fileName[0]}")
-            with open(fileName[0], "w") as f:
+
+            file_mode = "w"
+            file_exists = os.path.exists(fileName[0])
+
+            if file_exists:
+                file_mode = "a"
+
+            with open(fileName[0], file_mode) as f:
                 writer = csv.writer(f)
-                writer.writerow(
-                    ["Start Point", "Goal Point", "Brightest Path"]
-                )
+                if not file_exists:
+                    writer.writerow(
+                        ["Start Point", "Goal Point", "Brightest Path"]
+                    )
                 writer.writerow(
                     [
                         self.start_point,
