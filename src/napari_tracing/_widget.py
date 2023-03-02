@@ -1,11 +1,10 @@
 """
 TODO:
 Features:
-- Instead of a dialog box, use a save trace button to save the trace - Done
+
 - When saving a trace, use the following layout:
     Segment_ID x_start y_start z_start(if applicable) x y z
-- Use a combo box to show the available image layers
-that you can switch between
+
 - save the tracing layer as <image_layer_name_tracing>
 - how can you populate the napari UI using a CSV file
 
@@ -113,30 +112,12 @@ class TracerWidget(QWidget):
         self.worker = None
         self.current_tracing_result = None
 
-        # if layer and isinstance(layer, napari.layers.image.image.Image):
-        #     logger.info("image layer found")
-        #     logger.info(layer)
-        #     self.active_image_layer = layer
-        #     self.connect_layer(layer)
-        # else:
-        #     logger.info("layer not found. Finding active layer")
-        #     active_layer = self.find_active_layers()
-        #     if active_layer and isinstance(
-        # self.active_image_layer, napari.layers.image.image.Image):
-        #         logger.info("active image layer found")
-        #         logger.info(active_layer)
-        #         self.active_image_layer = active_layer
-        #         self.connect_layer(active_layer)
-
-        # commented the above lines because don't connect to any layer
-        # initially
         self.configure_gui()
 
-        self.viewer.layers.events.inserted.connect(self.slot_insert_layer)
-        self.viewer.layers.events.removed.connect(self.slot_remove_layer)
-        self.viewer.layers.selection.events.changed.connect(
-            self.slot_select_layer
+        self.viewer.layers.events.inserted.connect(
+            self.slot_new_layer_inserted
         )
+        self.viewer.layers.events.removed.connect(self.slot_layer_removed)
 
     def find_active_layers(self) -> Optional[Layer]:
         """
@@ -306,7 +287,7 @@ class TracerWidget(QWidget):
         logger.info(f"using {algo_name} as tracing algorithm")
         self.tracing_algorithm_name = algo_name
 
-    def slot_insert_layer(self, event: Event) -> None:
+    def slot_new_layer_inserted(self, event: Event) -> None:
         """
         Respond to new layer in viewer.
 
@@ -326,29 +307,73 @@ class TracerWidget(QWidget):
                 )
             # self.connect_layer(newly_inserted_layer)
 
-    def slot_remove_layer(self, event: Event) -> None:
+    def slot_layer_removed(self, event: Event) -> None:
         """
         Respond to layer delete in viewer.
 
         Args:
             event (Event): event.type == 'removed'
         """
-        logger.info(f'Removed layer "{event.source}"')
-        if event.source == self.active_terminal_points_layer:
-            self.start_point = None
-            self.goal_point = None
-            self.active_terminal_points_layer_data = np.array([])
-            self.active_terminal_points_layer = None
-
-        elif isinstance(event.source, napari.layers.image.image.Image):
+        if isinstance(event.source, napari.layers.image.image.Image):
+            logger.info(f'Removed image layer "{event.source}"')
             index = self.available_img_layers_combo_box.findText(
                 event.source.name
             )  # find the index of text
             self.available_img_layers_combo_box.removeItem(index)
+            logger.info(f"removed {event.source} entry from combo box")
 
-        # currently_selected_layer = self.find_active_layers()
-        # if currently_selected_layer:
-        #     self.connect_layer(currently_selected_layer)
+            layer_id = hash(event.source)
+
+            if layer_id in self.layer_mapping:
+                del self.layer_mapping[layer_id]
+
+            if layer_id in self.traced_segments:
+                del self.traced_segments[layer_id]
+
+            if layer_id in self.most_recent_segment_id:
+                del self.most_recent_segment_id[layer_id]
+
+            if event.source == self.active_image_layer:
+                logger.info("Removed layer was the active_image_layer")
+                layer_id = hash(self.active_image_layer)
+
+                if self.active_terminal_points_layer is not None:
+                    self.viewer.layers.remove(
+                        self.active_terminal_points_layer.name
+                    )
+                    self.active_terminal_points_layer = None
+                    self.active_terminal_points_layer_data = np.array([])
+
+                if self.active_tracing_result_layer is not None:
+                    self.viewer.layers.remove(self.active_tracing_result_layer)
+                    self.active_tracing_result_layer = None
+                    self.active_tracing_result_layer_data = np.array([])
+
+                self.active_image_layer = None
+                self.active_image_layer_data = np.array([])
+
+        elif isinstance(event.source, napari.layers.points.points.Points):
+            layer_id = hash(self.active_image_layer_data)
+            if event.source == self.active_terminal_points_layer:
+                if layer_id in self.layer_mapping:
+                    tracing_layers = self.layer_mapping[layer_id]
+                    tracing_layers.terminal_points_layer = None
+
+                self.start_point = None
+                self.goal_point = None
+                self.active_terminal_points_layer_data = np.array([])
+                self.active_terminal_points_layer = None
+
+            elif event.source == self.active_tracing_result_layer:
+                if layer_id in self.layer_mapping:
+                    tracing_layers = self.layer_mapping[layer_id]
+                    tracing_layers.result_tracing_layer = None
+
+                if layer_id in self.traced_segments:
+                    del self.traced_segments[layer_id]
+
+                self.active_tracing_result_layer_data = np.array([])
+                self.active_tracing_result_layer = None
 
     def connect_layer(self, layer: Layer) -> None:
         """
@@ -441,20 +466,6 @@ class TracerWidget(QWidget):
                 self.goal_point = None
 
             self.active_terminal_points_layer_data = event.source.data.copy()
-
-    def slot_select_layer(self, event: Event) -> None:
-        """Respond to layer selection in viewer.
-
-        Args:
-            event (Event): event.type == 'changed'
-        """
-        currently_selected_layer = self.find_active_layers()
-        if (
-            currently_selected_layer
-            and currently_selected_layer != self.active_image_layer
-        ):
-            logger.info(f"New layer selected: {currently_selected_layer}")
-            self.connect_layer(currently_selected_layer)
 
     @thread_worker
     def _trace(self):
