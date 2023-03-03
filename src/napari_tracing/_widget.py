@@ -72,9 +72,9 @@ class TracerWidget(QWidget):
         warnings.filterwarnings(action="ignore", category=FutureWarning)
 
         self.viewer = viewer
-        self.active_image_layer = (
-            None  # stores a reference to the currently active image layer
-        )
+        # stores a reference to the currently active image layer
+        self.active_image_layer = None
+
         # stores a reference to the currently active terminal points layer
         self.active_terminal_points_layer = None
 
@@ -90,17 +90,16 @@ class TracerWidget(QWidget):
         self.start_idx = -1
         self.end_idx = -1
 
-        self.tracing_algorithm_name = (
-            "A* Search"  # algorithm choice for brightest path tracing
-        )
-        self.curr_tracing_segment: Segment = (
-            None  # the result of the current tracing
-        )
+        # algorithm choice for brightest path tracing
+        self.tracing_algorithm_name = "A* Search"
+
+        # the result of the current tracing
+        self.curr_traced_segment: Segment = None
 
         # maps the active image_layer hash/id to a TracingLayers object
         # (containing a reference of the terminal points layer and
         # tracing layer mapped to the current layer)
-        self.layer_mapping: Dict[int:TracingLayers] = None
+        self.layer_mapping: Dict[int:TracingLayers] = {}
 
         # maps the active image_layer hash/id
         # to a list of tracings for that layer
@@ -203,17 +202,21 @@ class TracerWidget(QWidget):
         logger.info(
             f"using {img_layer_name} as our layer for tracing the image"
         )
-        self.active_image_layer = [
+        logger.info(f"Available layers: {self.viewer.layers}")
+        img_layers = [
             layer
             for layer in self.viewer.layers
             if layer.name == img_layer_name
         ]
+
+        if len(img_layers) <= 0:
+            logger.info("Couldn't find the selected image layer for tracing")
+        else:
+            self.active_image_layer = img_layers[0]
+
         logger.info(
             f"selected new image layer for tracing {self.active_image_layer}"
         )
-
-        if self.active_image_layer is None:
-            logger.info("Couldn't find the selected image layer for tracing")
 
         # configure image layer after selection
         self._configure_layers_for_tracing()
@@ -256,33 +259,6 @@ class TracerWidget(QWidget):
             self.slot_points_data_change
         )
 
-    def _save_traced_segment(self):
-        """
-        Saves a traced segment for an image layer the traced_segments
-        dictionary
-        """
-        layer_id = hash(self.active_image_layer)
-        logger.info("saving tracing for" + f"layer id {self.layer_id}")
-        if layer_id in self.traced_segments:
-            self.traced_segments[self.layer_id].append(
-                self.curr_tracing_segment.copy()
-            )
-        else:
-            self.traced_segments[
-                self.layer_id
-            ] = self.curr_tracing_segment.copy()
-
-    def _update_most_recent_segment_id(self):
-        """
-        get the most recent tracing segment ID for an image layer from
-        """
-        layer_id = hash(self.active_image_layer)
-        logger.info("saving tracing for" + f"layer id {self.layer_id}")
-        if layer_id in self.most_recent_segment_ids:
-            self.self.most_recent_segment_ids[self.layer_id] += 1
-        else:
-            self.self.most_recent_segment_ids[self.layer_id] = 0
-
     def set_algorithm_for_tracing(self, algo_name: str):
         logger.info(f"using {algo_name} as tracing algorithm")
         self.tracing_algorithm_name = algo_name
@@ -305,7 +281,6 @@ class TracerWidget(QWidget):
                 self.available_img_layers_combo_box.addItem(
                     newly_inserted_layer.name
                 )
-            # self.connect_layer(newly_inserted_layer)
 
     def slot_layer_removed(self, event: Event) -> None:
         """
@@ -375,39 +350,6 @@ class TracerWidget(QWidget):
                 self.active_tracing_result_layer_data = np.array([])
                 self.active_tracing_result_layer = None
 
-    def connect_layer(self, layer: Layer) -> None:
-        """
-        Connect to a layer's events.
-        Here, we're connecting to the data change event.
-
-                Args:
-                        layer: Layer (Layer to connect to.)
-        """
-
-        if isinstance(layer, napari.layers.points.points.Points):
-            logger.info("Checking if layer has _data field and any data")
-            has_data_field = "_data" in vars(layer).keys()
-            logger.info(f"_data in vars(layer).keys(): {has_data_field}")
-            logger.info(f"layer.data.any(): {layer.data.any()}")
-
-            if has_data_field:
-                logger.info("Getting points layer data")
-
-                if self.active_terminal_points_layer is None:
-                    self.active_terminal_points_layer = layer
-                    self.active_terminal_points_layer_data = layer.data.copy()
-                    self.active_terminal_points_layer.events.data.connect(
-                        self.slot_points_data_change
-                    )
-
-        elif isinstance(layer, napari.layers.image.image.Image):
-            if "_data" in vars(layer).keys() and layer.data.any():
-                logger.info("Getting image layer data")
-                self.active_image_layer = layer
-                self.active_image_layer_data = layer.data.copy()
-
-        # self.image_layer.events.highlight.connect(self.slot_user_selected_point)
-
     def slot_points_data_change(self, event: Event) -> None:
         """
         Modify the start/end points for a* search
@@ -427,11 +369,11 @@ class TracerWidget(QWidget):
             self.active_terminal_points_layer_data
         ):
             logger.info("new point added")
-            idx, point = Utils.get_diff(
+            idx, points = Utils.get_diff(
                 event.source.data, self.active_terminal_points_layer_data
             )
             # point = tuple(map(int, tuple(point[0])))
-            point = tuple(point[0])
+            point = tuple(points[0])
 
             if self.start_point is None and point != self.goal_point:
                 logger.info(f"Making {point} as our start")
@@ -477,8 +419,6 @@ class TracerWidget(QWidget):
             logger.info("No start/end point specified")
             return
 
-        self.trace_object = Segment()
-
         if self.tracing_algorithm_name == "NBA* Search":
             tracing_algorithm = NBAStarSearch(
                 self.active_image_layer_data, self.start_point, self.goal_point
@@ -489,9 +429,55 @@ class TracerWidget(QWidget):
             )
 
         result = tracing_algorithm.search()
-        self.current_tracing_result = result
-        logger.info(f"Completed tracing. Found path of length {len(result)}")
-        return result
+        if not result or len(result) == 0:
+            logger.info("Couldn't find any brightest path")
+            return []
+        else:
+            logger.info(
+                f"Completed tracing. Found path of length {len(result)}"
+            )
+            self._save_traced_segment(result)
+            self.current_tracing_result = result
+            return result
+
+    def _save_traced_segment(self, result: List[np.ndarray]):
+        """
+        Saves a traced segment for an image layer the traced_segments
+        dictionary
+        """
+        segment_ID = self._get_segment_id()
+        logger.info(
+            f"Creating a tracing segment with segment_ID: {segment_ID}"
+        )
+        self.curr_traced_segment = Segment(
+            segment_ID=segment_ID,
+            start_point=self.start_point,
+            goal_point=self.goal_point,
+            tracing_result=result,
+            tracing_algorithm=self.tracing_algorithm_name,
+        )
+        logger.info(f"Created a segment: {self.curr_traced_segment}")
+
+        layer_id = hash(self.active_image_layer)
+        logger.info("saving tracing for " + f"layer id {layer_id}")
+
+        if layer_id in self.traced_segments:
+            self.traced_segments[layer_id].append(self.curr_traced_segment)
+        else:
+            self.traced_segments[layer_id] = [self.curr_traced_segment]
+        logger.info("saved tracing segment")
+
+    def _get_segment_id(self):
+        """
+        get the most recent tracing segment ID for an image layer from
+        """
+        layer_id = hash(self.active_image_layer)
+        logger.info("getting segmentID for " + f"layer id {layer_id}")
+        if layer_id in self.most_recent_segment_id:
+            self.most_recent_segment_id[layer_id] += 1
+        else:
+            self.most_recent_segment_id[layer_id] = 0
+        return self.most_recent_segment_id[layer_id]
 
     def trace_brightest_path(self):
         """call the brightest_path_lib to find brightest path
@@ -503,10 +489,10 @@ class TracerWidget(QWidget):
 
     def plot_brightest_path(self, points: List[np.ndarray]):
         logger.info("Plotting brightest path...")
-        if not self.active_tracing_result_layer:
+        if self.active_tracing_result_layer is None:
             self.active_tracing_result_layer = self.viewer.add_points(
                 points,
-                name="Tracing",
+                name=self.active_image_layer.name + "_tracing",
                 size=1,
                 edge_width=1,
                 face_color="green",
@@ -518,6 +504,18 @@ class TracerWidget(QWidget):
                 self.active_tracing_result_layer.data, points, axis=0
             )
             self.active_tracing_result_layer.refresh()
+
+        self._reset_terminal_points()
+        logger.info(
+            f"Saved traces for {self.active_image_layer} \
+                    are {self.traced_segments}"
+        )
+
+    def _reset_terminal_points(self):
+        self.start_point = None
+        self.goal_point = None
+        # add code to switch back to terminal points layer
+        # so that user doesn't add new points in tracing result layer
 
     def cancel_tracing(self):
         """Cancel brightest path tracing"""
@@ -614,26 +612,11 @@ class TracerWidget(QWidget):
             self.viewer.layers.remove("Tracing")
             self.active_tracing_result_layer = None
 
-    def add_point(self, point: np.ndarray, color: Optional[np.ndarray] = None):
-        """
-        add a new point in the napari layer
-        """
-        self.active_terminal_points_layer_data = np.append(
-            self.active_terminal_points_layer_data, np.array([point]), axis=0
-        )
-        self.active_image_layer.data = self.active_terminal_points_layer_data
-        index = len(self.active_terminal_points_layer_data) - 1
-
-        if color is not None:
-            self.change_color(index, color)
-
-        self.active_image_layer.refresh()
-
     def change_color(self, idx: int, color: np.array) -> None:
         """
         change the color of a point in the layer
         """
-        layer_colors = self.active_image_layer._face.colors
+        layer_colors = self.active_terminal_points_layer._face.colors
         layer_colors[idx] = color
-        self.active_image_layer._face.current_color = WHITE
-        self.active_image_layer.refresh()
+        self.active_terminal_points_layer._face.current_color = WHITE
+        self.active_terminal_points_layer.refresh()
