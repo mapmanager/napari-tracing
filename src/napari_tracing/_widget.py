@@ -57,7 +57,7 @@ from qtpy.QtWidgets import (  # noqa
 )
 
 from ._combobox import ComboBox
-from ._dialog_widget import SaveTracingWidget  # noqa
+from ._dialog_widget import AcceptTracingWidget, SaveTracingWidget  # noqa
 from ._layer_model import TracingLayers  # noqa
 from ._logger import logger  # noqa
 from ._segment_model import Segment  # noqa
@@ -129,6 +129,10 @@ class TracerWidget(QWidget):
         )
         self.viewer.layers.events.removing.connect(self.slot_removing_layer)
         self.viewer.layers.events.removed.connect(self.slot_layer_removed)
+
+        self.accept_tracing_widget = AcceptTracingWidget()
+        self.accept_tracing_widget.acceptTracing.connect(self.accept_tracing)
+        self.accept_tracing_widget.rejectTracing.connect(self.reject_tracing)
 
         self.save_tracing_widget = SaveTracingWidget()
         self.save_tracing_widget.saveTracing.connect(self.save_tracing)
@@ -474,13 +478,13 @@ class TracerWidget(QWidget):
                 logger.info(f"Making {point} as our start")
                 self.start_idx = len(event.source.data) - 1
                 self.start_point = point
-                self.change_color(idx, ORANGE)
+                self.change_color(idx, GREEN)
 
             elif self.goal_point is None and point != self.start_point:
                 logger.info(f"Making {point} as our end")
                 self.end_idx = len(event.source.data) - 1
                 self.goal_point = point
-                self.change_color(idx, TURQUOISE)
+                self.change_color(idx, RED)
 
             self.active_terminal_points_layer_data = event.source.data.copy()
 
@@ -573,6 +577,27 @@ class TracerWidget(QWidget):
             self.traced_segments[layer_id] = [self.curr_traced_segment]
         logger.info("saved tracing segment")
 
+    def _reset_terminal_points(self):
+        logger.info(
+            f"Resetting terminal points based on the {self.tracing_mode}"
+        )
+        if self.tracing_mode == "Disjoint Tracing Mode":
+            self.start_point = None
+        else:
+            self.start_point = self.goal_point
+            idx = Utils.get_idx(
+                target=self.goal_point,
+                layer_data=self.active_terminal_points_layer_data,
+            )
+            logger.info(f"found idx {idx} for goal point")
+            logger.info("Changing the idx color to orange")
+            self.change_color(idx, GREEN)
+            # get the index of the point layer in the terminal points layer data,
+            # change its color to orange
+        self.goal_point = None
+        # add code to switch back to terminal points layer
+        # so that user doesn't add new points in tracing result layer
+
     def trace_brightest_path(self):
         """call the brightest_path_lib to find brightest path
         between start_point and goal_point
@@ -604,32 +629,12 @@ class TracerWidget(QWidget):
                 )
             self.active_tracing_result_layer.refresh()
 
-        self._reset_terminal_points()
+        self.accept_tracing_widget.show()
+
         logger.info(
             f"Saved traces for {self.active_image_layer} \
             are {self.traced_segments}"
         )
-
-    def _reset_terminal_points(self):
-        logger.info(
-            f"Resetting terminal points based on the {self.tracing_mode}"
-        )
-        if self.tracing_mode == "Disjoint Tracing Mode":
-            self.start_point = None
-        else:
-            self.start_point = self.goal_point
-            idx = Utils.get_idx(
-                target=self.goal_point,
-                layer_data=self.active_terminal_points_layer_data,
-            )
-            logger.info(f"found idx {idx} for goal point")
-            logger.info("Changing the idx color to orange")
-            self.change_color(idx, ORANGE)
-            # get the index of the point layer in the terminal points layer data,
-            # change its color to orange
-        self.goal_point = None
-        # add code to switch back to terminal points layer
-        # so that user doesn't add new points in tracing result layer
 
     def cancel_tracing(self):
         """Cancel brightest path tracing"""
@@ -697,6 +702,59 @@ class TracerWidget(QWidget):
         """
         logger.info("Discard tracing")
         return
+
+    def accept_tracing(self):
+        """
+        Accept the current tracing
+        """
+        logger.info("Tracing accepted")
+        self._reset_terminal_points()
+
+    def reject_tracing(self):
+        """
+        discard the current tracing
+        """
+        # if this is the one and only tracing for that layer, then remove entire layer
+        # otherwise just remove the one tracing
+        active_img_layer_id = hash(self.active_image_layer)
+        if active_img_layer_id in self.traced_segments:
+            if len(self.traced_segments[active_img_layer_id]) > 1:
+                recent_segment = self.traced_segments[active_img_layer_id][-1]
+                start_index_of_recent_result = len(
+                    self.active_tracing_result_layer.data
+                ) - len(recent_segment.tracing_result)
+                end_index_of_recent_result = (
+                    len(self.active_tracing_result_layer.data) - 1
+                )
+                indices_of_result_points = list(
+                    range(
+                        start_index_of_recent_result,
+                        end_index_of_recent_result + 1,
+                    )
+                )
+                self.active_tracing_result_layer.data = np.delete(
+                    self.active_tracing_result_layer.data,
+                    indices_of_result_points,
+                    0,
+                )
+
+                del self.traced_segments[active_img_layer_id][-1]
+            else:
+                if active_img_layer_id in self.layer_mapping:
+                    logger.info(
+                        f"current layer mapping: {self.layer_mapping[active_img_layer_id].result_tracing_layer}"
+                    )
+                    tracing_layers = self.layer_mapping[active_img_layer_id]
+                    tracing_layers.result_tracing_layer = None
+                    logger.info(
+                        f"layer mapping after removing tracing result layer: {self.layer_mapping[active_img_layer_id].result_tracing_layer}"
+                    )
+                    logger.info("Removing tracing result layer from viewer")
+                    self.viewer.layers.remove(
+                        self.active_tracing_result_layer.name
+                    )
+                    self.active_tracing_result_layer_data = np.array([])
+                    self.active_tracing_result_layer = None
 
     def change_color(self, idx: int, color: np.array) -> None:
         """
