@@ -1,21 +1,32 @@
+# flake8: noqa
 """
 TODO:
 Features:
-
-- When saving a trace, use the following layout:
-    Segment_ID x_start y_start z_start(if applicable) x y z
-
-- save the tracing layer as <image_layer_name_tracing>
-- how can you populate the napari UI using a CSV file
-
+0. Disable trace button initially if only 1 point is selected
+1. Add a mode:
+    1. Continuous mode: continuing on the same disjoint segment
+        - prev goal becomes the new start if there are already two points
+2. accept or reject tracing
+    Do this after you create a tracing.
+    1. if tracing is rejected:
+        - if a tracing layer already exists for other tracings in the same
+          layer, delete this particular tracing
+        - if the tracing layer does not exist, and you specifically created
+          it for this tracing, then removing the tracing layer itself.
+    2. if tracing is accepted, do nothing. don't save path in the CSV yet
+       until save trace is clicked
+3. Load:
+    - load swc to populate the answer to the tracing on load
+    - disjoint tracing into runtime variables interactively
+4. Visualization for tracing:
+    - Not sure how to do this
+5. Change layer selection to terminal points layer after tracing is drawn
 GUI related:
-- Vertically center the gui layout on the screen
 - Read point size (for path width) from a textbox?
 - Read trace path color and size from input
 - restore edge color and point size after plotting complete to prev color/size
 """
 import csv
-import os
 import sys
 
 sys.path.append("/Users/vasudhajha/Documents/mapmanager/brightest-path-lib")
@@ -36,15 +47,16 @@ from napari.layers import Layer  # noqa
 from napari.qt.threading import thread_worker  # noqa
 from napari.utils.events import Event  # noqa
 from napari.viewer import Viewer  # noqa
+from qtpy.QtWidgets import QWidget  # noqa
 from qtpy.QtWidgets import (  # noqa
     QComboBox,
     QFileDialog,
     QHBoxLayout,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
+from ._combobox import ComboBox
 from ._dialog_widget import SaveTracingWidget  # noqa
 from ._layer_model import TracingLayers  # noqa
 from ._logger import logger  # noqa
@@ -92,6 +104,7 @@ class TracerWidget(QWidget):
 
         # algorithm choice for brightest path tracing
         self.tracing_algorithm_name = "A* Search"
+        self.tracing_mode = "Continuous Tracing Mode"
 
         # the result of the current tracing
         self.curr_traced_segment: Segment = None
@@ -107,16 +120,19 @@ class TracerWidget(QWidget):
 
         # maps a layer id to its most recent segment value
         self.most_recent_segment_id: Dict[int:int] = {}
-
         self.worker = None
-        self.current_tracing_result = None
 
         self.configure_gui()
 
         self.viewer.layers.events.inserted.connect(
             self.slot_new_layer_inserted
         )
+        self.viewer.layers.events.removing.connect(self.slot_removing_layer)
         self.viewer.layers.events.removed.connect(self.slot_layer_removed)
+
+        self.save_tracing_widget = SaveTracingWidget()
+        self.save_tracing_widget.saveTracing.connect(self.save_tracing)
+        self.save_tracing_widget.discardTracing.connect(self.discard_tracing)
 
     def find_active_layers(self) -> Optional[Layer]:
         """
@@ -150,11 +166,14 @@ class TracerWidget(QWidget):
 
         # this property will highlight a list of available image layers
         # for which tracing algorithms can be run
-        self.available_img_layers_combo_box = QComboBox(
+        self.available_img_layers_combo_box = ComboBox(
             self
         )  # making it a self property because it will be constantly updated
+        # self.available_img_layers_combo_box.setPlaceholderText(
+        #     "--Select Layer for Tracing--"
+        # )
         self.available_img_layers_combo_box.setPlaceholderText(
-            "--Available Image Layers for Tracing--"
+            "Select Image Layer"
         )
 
         # if napari has image layers already present,
@@ -168,16 +187,32 @@ class TracerWidget(QWidget):
 
         main_layout.addWidget(self.available_img_layers_combo_box)
 
-        algo_selection_layout = QVBoxLayout()
+        # algo_selection_layout = QVBoxLayout()
+        # algorithm_selection_combo_box = QComboBox(self)
+        # algorithm_selection_combo_box.addItem("A* Search")
+        # algorithm_selection_combo_box.addItem("NBA* Search")
+        # algorithm_selection_combo_box.activated[str].connect(
+        #     self.set_algorithm_for_tracing
+        # )
+        # algo_selection_layout.addWidget(algorithm_selection_combo_box)
+
+        algo_and_mode_layout = QHBoxLayout()
         algorithm_selection_combo_box = QComboBox(self)
         algorithm_selection_combo_box.addItem("A* Search")
         algorithm_selection_combo_box.addItem("NBA* Search")
         algorithm_selection_combo_box.activated[str].connect(
             self.set_algorithm_for_tracing
         )
-        algo_selection_layout.addWidget(algorithm_selection_combo_box)
+        algo_and_mode_layout.addWidget(algorithm_selection_combo_box)
 
-        main_layout.addLayout(algo_selection_layout)
+        mode_selection_combo_box = QComboBox(self)
+        mode_selection_combo_box.addItem("Continuous Tracing Mode")
+        mode_selection_combo_box.addItem("Disjoint Tracing Mode")
+        mode_selection_combo_box.activated[str].connect(self.set_tracing_mode)
+        algo_and_mode_layout.addWidget(mode_selection_combo_box)
+
+        # main_layout.addLayout(algo_selection_layout)
+        main_layout.addLayout(algo_and_mode_layout)
 
         button_layout = QHBoxLayout()
         trace_button = QPushButton("Trace")
@@ -263,6 +298,10 @@ class TracerWidget(QWidget):
         logger.info(f"using {algo_name} as tracing algorithm")
         self.tracing_algorithm_name = algo_name
 
+    def set_tracing_mode(self, mode: str):
+        logger.info(f"using {mode} mode for tracing")
+        self.tracing_mode = mode
+
     def slot_new_layer_inserted(self, event: Event) -> None:
         """
         Respond to new layer in viewer.
@@ -282,6 +321,87 @@ class TracerWidget(QWidget):
                     newly_inserted_layer.name
                 )
 
+    def _remove_image_layer_mappings(self, image_layer_id: int):
+        if image_layer_id in self.layer_mapping:
+            del self.layer_mapping[image_layer_id]
+
+        if image_layer_id in self.traced_segments:
+            del self.traced_segments[image_layer_id]
+
+        if image_layer_id in self.most_recent_segment_id:
+            del self.most_recent_segment_id[image_layer_id]
+
+    def _reset_active_image_layer(self):
+        if self.active_terminal_points_layer is not None:
+            logger.info("Removing terminal points layer from viewer")
+            self.viewer.layers.remove(self.active_terminal_points_layer.name)
+            logger.info("Removed terminal points layer from viewer")
+            self.active_terminal_points_layer = None
+            self.active_terminal_points_layer_data = np.array([])
+
+        if self.active_tracing_result_layer is not None:
+            logger.info("Removing tracing result layer from viewer")
+            self.viewer.layers.remove(self.active_tracing_result_layer.name)
+            self.active_tracing_result_layer = None
+            self.active_tracing_result_layer_data = np.array([])
+            logger.info("Removed tracing result layer from viewer")
+
+        self.active_image_layer = None
+        self.active_image_layer_data = np.array([])
+
+    def _reset_active_terminal_points_layer(self):
+        active_img_layer_id = hash(self.active_image_layer)
+        if active_img_layer_id in self.layer_mapping:
+            logger.info(
+                f"current layer mapping: {self.layer_mapping[active_img_layer_id].terminal_points_layer}"
+            )
+            tracing_layers = self.layer_mapping[active_img_layer_id]
+            tracing_layers.terminal_points_layer = None
+            logger.info(
+                f"layer mapping after removing terminal pts layer: {self.layer_mapping[active_img_layer_id].terminal_points_layer}"
+            )
+
+        self.start_point = None
+        self.goal_point = None
+        self.active_terminal_points_layer_data = np.array([])
+        self.active_terminal_points_layer = None
+
+    def _reset_active_tracing_layer(self):
+        active_img_layer_id = hash(self.active_image_layer)
+        if active_img_layer_id in self.layer_mapping:
+            logger.info(
+                f"current layer mapping: {self.layer_mapping[active_img_layer_id].result_tracing_layer}"
+            )
+            tracing_layers = self.layer_mapping[active_img_layer_id]
+            tracing_layers.result_tracing_layer = None
+            logger.info(
+                f"layer mapping after removing tracing result layer: {self.layer_mapping[active_img_layer_id].result_tracing_layer}"
+            )
+
+        if active_img_layer_id in self.traced_segments:
+            self.traced_segments[active_img_layer_id] = []
+
+        self.active_tracing_result_layer_data = np.array([])
+        self.active_tracing_result_layer = None
+
+    def slot_removing_layer(self, event: Event) -> None:
+        """
+        Add a dialog box to ask user if they want to save tracing, not save tracing
+        or simply cancel (meaning stop deletion)
+        """
+        logger.info("Removing event emitted...")
+        logger.info(vars(event))
+        if not event or event.index:
+            logger.info("No information about layer to be removed")
+            return
+        removing_layer = self.viewer.layers[event.index]
+        removing_layer_id = hash(removing_layer)
+        if removing_layer_id in self.traced_segments:
+            if len(self.traced_segments[removing_layer_id]) > 0:
+                self.save_tracing_widget.show()
+        elif removing_layer == self.active_tracing_result_layer:
+            self.save_tracing_widget.show()
+
     def slot_layer_removed(self, event: Event) -> None:
         """
         Respond to layer delete in viewer.
@@ -289,66 +409,41 @@ class TracerWidget(QWidget):
         Args:
             event (Event): event.type == 'removed'
         """
-        if isinstance(event.source, napari.layers.image.image.Image):
-            logger.info(f'Removed image layer "{event.source}"')
+        logger.info("Removed event emitted....")
+        logger.info(f"vars(event) = {vars(event)}")
+        removed_layer = None
+        if not event.value:
+            logger.info("No information found about deleted layer...")
+            logger.info("Returning...")
+            return
+        removed_layer = event.value
+        removed_layer_id = hash(removed_layer)
+
+        if isinstance(removed_layer, napari.layers.image.image.Image):
             index = self.available_img_layers_combo_box.findText(
-                event.source.name
+                removed_layer.name
             )  # find the index of text
             self.available_img_layers_combo_box.removeItem(index)
-            logger.info(f"removed {event.source} entry from combo box")
+            logger.info(f"removed {removed_layer} entry from combo box")
 
-            layer_id = hash(event.source)
+            self._remove_image_layer_mappings(removed_layer_id)
 
-            if layer_id in self.layer_mapping:
-                del self.layer_mapping[layer_id]
-
-            if layer_id in self.traced_segments:
-                del self.traced_segments[layer_id]
-
-            if layer_id in self.most_recent_segment_id:
-                del self.most_recent_segment_id[layer_id]
-
-            if event.source == self.active_image_layer:
+            if removed_layer == self.active_image_layer:
                 logger.info("Removed layer was the active_image_layer")
-                layer_id = hash(self.active_image_layer)
+                self._reset_active_image_layer()
 
-                if self.active_terminal_points_layer is not None:
-                    self.viewer.layers.remove(
-                        self.active_terminal_points_layer.name
-                    )
-                    self.active_terminal_points_layer = None
-                    self.active_terminal_points_layer_data = np.array([])
+        elif isinstance(removed_layer, napari.layers.points.points.Points):
+            if removed_layer == self.active_terminal_points_layer:
+                logger.info(
+                    "Removed layer was the active_terminal_points_layer"
+                )
+                self._reset_active_terminal_points_layer()
 
-                if self.active_tracing_result_layer is not None:
-                    self.viewer.layers.remove(self.active_tracing_result_layer)
-                    self.active_tracing_result_layer = None
-                    self.active_tracing_result_layer_data = np.array([])
-
-                self.active_image_layer = None
-                self.active_image_layer_data = np.array([])
-
-        elif isinstance(event.source, napari.layers.points.points.Points):
-            layer_id = hash(self.active_image_layer_data)
-            if event.source == self.active_terminal_points_layer:
-                if layer_id in self.layer_mapping:
-                    tracing_layers = self.layer_mapping[layer_id]
-                    tracing_layers.terminal_points_layer = None
-
-                self.start_point = None
-                self.goal_point = None
-                self.active_terminal_points_layer_data = np.array([])
-                self.active_terminal_points_layer = None
-
-            elif event.source == self.active_tracing_result_layer:
-                if layer_id in self.layer_mapping:
-                    tracing_layers = self.layer_mapping[layer_id]
-                    tracing_layers.result_tracing_layer = None
-
-                if layer_id in self.traced_segments:
-                    del self.traced_segments[layer_id]
-
-                self.active_tracing_result_layer_data = np.array([])
-                self.active_tracing_result_layer = None
+            elif removed_layer == self.active_tracing_result_layer:
+                logger.info(
+                    "Removed layer was the active_tracing_result_layer"
+                )
+                self._reset_active_tracing_layer()
 
     def slot_points_data_change(self, event: Event) -> None:
         """
@@ -437,8 +532,19 @@ class TracerWidget(QWidget):
                 f"Completed tracing. Found path of length {len(result)}"
             )
             self._save_traced_segment(result)
-            self.current_tracing_result = result
             return result
+
+    def _get_segment_id(self):
+        """
+        get the most recent tracing segment ID for an image layer from
+        """
+        layer_id = hash(self.active_image_layer)
+        logger.info("getting segmentID for " + f"layer id {layer_id}")
+        if layer_id in self.most_recent_segment_id:
+            self.most_recent_segment_id[layer_id] += 1
+        else:
+            self.most_recent_segment_id[layer_id] = 0
+        return self.most_recent_segment_id[layer_id]
 
     def _save_traced_segment(self, result: List[np.ndarray]):
         """
@@ -467,18 +573,6 @@ class TracerWidget(QWidget):
             self.traced_segments[layer_id] = [self.curr_traced_segment]
         logger.info("saved tracing segment")
 
-    def _get_segment_id(self):
-        """
-        get the most recent tracing segment ID for an image layer from
-        """
-        layer_id = hash(self.active_image_layer)
-        logger.info("getting segmentID for " + f"layer id {layer_id}")
-        if layer_id in self.most_recent_segment_id:
-            self.most_recent_segment_id[layer_id] += 1
-        else:
-            self.most_recent_segment_id[layer_id] = 0
-        return self.most_recent_segment_id[layer_id]
-
     def trace_brightest_path(self):
         """call the brightest_path_lib to find brightest path
         between start_point and goal_point
@@ -489,30 +583,50 @@ class TracerWidget(QWidget):
 
     def plot_brightest_path(self, points: List[np.ndarray]):
         logger.info("Plotting brightest path...")
-        if self.active_tracing_result_layer is None:
-            self.active_tracing_result_layer = self.viewer.add_points(
-                points,
-                name=self.active_image_layer.name + "_tracing",
-                size=1,
-                edge_width=1,
-                face_color="green",
-                edge_color="green",
-            )
-        else:
-            # append the points numpy array to the data in tracing_result_layer
-            self.active_tracing_result_layer.data = np.append(
-                self.active_tracing_result_layer.data, points, axis=0
-            )
+        image_layer_id = hash(self.active_image_layer)
+        if image_layer_id in self.layer_mapping:
+            tracing_layers = self.layer_mapping[image_layer_id]
+            if tracing_layers.result_tracing_layer is None:
+                self.active_tracing_result_layer = self.viewer.add_points(
+                    points,
+                    name=self.active_image_layer.name + "_tracing",
+                    size=1,
+                    edge_width=1,
+                    face_color="green",
+                    edge_color="green",
+                )
+                tracing_layers.result_tracing_layer = (
+                    self.active_tracing_result_layer
+                )
+            else:
+                self.active_tracing_result_layer.data = np.append(
+                    self.active_tracing_result_layer.data, points, axis=0
+                )
             self.active_tracing_result_layer.refresh()
 
         self._reset_terminal_points()
         logger.info(
             f"Saved traces for {self.active_image_layer} \
-                    are {self.traced_segments}"
+            are {self.traced_segments}"
         )
 
     def _reset_terminal_points(self):
-        self.start_point = None
+        logger.info(
+            f"Resetting terminal points based on the {self.tracing_mode}"
+        )
+        if self.tracing_mode == "Disjoint Tracing Mode":
+            self.start_point = None
+        else:
+            self.start_point = self.goal_point
+            idx = Utils.get_idx(
+                target=self.goal_point,
+                layer_data=self.active_terminal_points_layer_data,
+            )
+            logger.info(f"found idx {idx} for goal point")
+            logger.info("Changing the idx color to orange")
+            self.change_color(idx, ORANGE)
+            # get the index of the point layer in the terminal points layer data,
+            # change its color to orange
         self.goal_point = None
         # add code to switch back to terminal points layer
         # so that user doesn't add new points in tracing result layer
@@ -530,87 +644,59 @@ class TracerWidget(QWidget):
         Default mode is "w", if a tracing for that layer doesn't exists already
         otherwise, it appends to an already present file
         """
-        if self.start_point is None or self.goal_point is None:
+
+        if (
+            self.curr_traced_segment is None
+            or len(self.traced_segments.values()) == 0
+        ):
             # we don't have any tracing to save
-            logger.info("No tracing done since start and end points are None")
+            logger.info("No currently traced segment found")
+            logger.info("saving nothing.")
             return
 
-        logger.info("Saving tracing")
-        tracing = Segment(
-            self.start_point, self.goal_point, self.current_tracing_result
-        )
-        self.layer_segment_mapping.append(tracing)
+        logger.info("Saving tracing...")
+
         fileName = QFileDialog.getSaveFileName(
-            self, "Save Tracing As", "", filter="*.csv"
+            self,
+            "Save Tracing As",
+            self.active_tracing_result_layer.name,
+            filter="*.csv",
         )
         if fileName:
             logger.info(f"Saving file as {fileName[0]}")
-
-            file_mode = "w"
-            file_exists = os.path.exists(fileName[0])
-
-            if file_exists:
-                file_mode = "a"
-
-            with open(fileName[0], file_mode) as f:
+            with open(fileName[0], "w") as f:
                 writer = csv.writer(f)
-                if not file_exists:
-                    column_headers = self.get_column_headers_for_saving_trace()
-                    writer.writerow(column_headers)
-                writer.writerow(
-                    [
-                        self.start_point,
-                        self.goal_point,
-                        self.current_tracing_result,
-                    ]
-                )
+                column_headers = ["z", "x", "y", "prevIdx"]
+                writer.writerow(column_headers)
+                for row in self._get_row_values_for_saving_trace():
+                    writer.writerow(row)
 
-            logger.info("Resetting start and goal point variables")
+    def _get_row_values_for_saving_trace(self) -> List:
+        rows = []
 
-        self.start_point = None
-        self.goal_point = None
-
-    def get_column_headers_for_saving_trace(self) -> List[str]:
-        if len(self.start_point) == 2:
-            # we're dealing with a 2D image
-            return [
-                "segment_ID",
-                "x_start",
-                "y_start",
-                "x_goal",
-                "y_goal",
-                "path_x",
-                "path_y",
-            ]
-        else:
-            # we're dealing with a 3D image
-            return [
-                "segment_ID",
-                "x_start",
-                "y_start",
-                "z_start",
-                "x_goal",
-                "y_goal",
-                "z_goal",
-                "path_x",
-                "path_y",
-                "path_z",
-            ]
-
-    def get_row_values_for_saving_trace(self) -> List:
-        if len(self.start_point) == 2:
-            return []
-        else:
-            return []
+        active_layer_id = hash(self.active_image_layer)
+        if active_layer_id in self.traced_segments:
+            for segment in self.traced_segments[active_layer_id]:
+                prevIdx = -1
+                result = segment.tracing_result
+                for point in result:
+                    if len(point) == 2:  # (y, x)
+                        rows.append(
+                            ["N/A", point[1], point[0], prevIdx]
+                        )  # z, x, y, prevIdx
+                    else:
+                        rows.append(
+                            [point[0], point[2], point[1], prevIdx]
+                        )  # z, x, y, prevIdx
+                    prevIdx += 1
+        return rows
 
     def discard_tracing(self):
         """
         Discard the result of a tracing
         """
         logger.info("Discard tracing")
-        if self.active_tracing_result_layer is not None:
-            self.viewer.layers.remove("Tracing")
-            self.active_tracing_result_layer = None
+        return
 
     def change_color(self, idx: int, color: np.array) -> None:
         """

@@ -18,7 +18,9 @@ class SaveTracingWidget(QDialog):
         self.buttonBox.rejected.connect(self.on_reject)
 
         self.layout = QVBoxLayout()
-        message = QLabel("Do you want to save your tracing to a CSV file?")
+        message = QLabel(
+            "Do you want to save your tracing(s) to a CSV file before deleting this layer?"  # noqa
+        )
         self.layout.addWidget(message)
         self.layout.addWidget(self.buttonBox)
         self.setLayout(self.layout)
