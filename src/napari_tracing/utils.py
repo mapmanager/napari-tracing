@@ -51,3 +51,12 @@ class Utils:
         res = (differing_indices, np.array(diff_data))
         logger.info(res)
         return res
+
+    def get_idx(target: np.ndarray, layer_data: np.ndarray) -> int:
+        idx = len(layer_data) - 1
+        while idx > 0:
+            diff = layer_data[idx] - target
+            if diff.any():
+                idx -= 1
+            else:
+                return idx
