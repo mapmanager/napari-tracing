@@ -37,7 +37,7 @@ sys.path.append(
     "/Users/vasudhajha/Documents/mapmanager/brightest-path-lib/brightest_path_lib/algorithm"  # noqa
 )
 import warnings  # noqa
-from typing import Dict, List, Optional  # noqa
+from typing import Dict, List, Optional, Tuple  # noqa
 
 import napari  # noqa
 import numpy as np  # noqa
@@ -61,6 +61,7 @@ from ._dialog_widget import AcceptTracingWidget, SaveTracingWidget  # noqa
 from ._layer_model import TracingLayers  # noqa
 from ._logger import logger  # noqa
 from ._segment_model import Segment  # noqa
+from ._trace_loader import TraceLoader
 from .utils import Utils  # noqa
 
 RED = np.array([1, 0, 0, 1])
@@ -254,11 +255,11 @@ class TracerWidget(QWidget):
         logger.info(
             f"selected new image layer for tracing {self.active_image_layer}"
         )
-
+        self.active_image_layer_data = self.active_image_layer.data.copy()
         # configure image layer after selection
-        self._configure_layers_for_tracing()
+        self._configure_terminal_points_layer()
 
-    def _configure_layers_for_tracing(self):
+    def _configure_terminal_points_layer(self):
         """
         configures properties of the image_layer that need to be
         tracked once its selected to be
@@ -286,7 +287,6 @@ class TracerWidget(QWidget):
             self.layer_mapping[layer_id] = tracing_layers
 
         # Copy the active layers data. We will use it later on for tracing
-        self.active_image_layer_data = self.active_image_layer.data.copy()
         self.active_terminal_points_layer_data = (
             self.active_terminal_points_layer.data.copy()
         )
@@ -669,7 +669,7 @@ class TracerWidget(QWidget):
             logger.info(f"Saving file as {fileName[0]}")
             with open(fileName[0], "w") as f:
                 writer = csv.writer(f)
-                column_headers = ["z", "x", "y", "prevIdx"]
+                column_headers = ["idx", "x", "y", "z", "prevIdx"]
                 writer.writerow(column_headers)
                 for row in self._get_row_values_for_saving_trace():
                     writer.writerow(row)
@@ -679,18 +679,35 @@ class TracerWidget(QWidget):
 
         active_layer_id = hash(self.active_image_layer)
         if active_layer_id in self.traced_segments:
+            idx = 0
             for segment in self.traced_segments[active_layer_id]:
                 prevIdx = -1
                 result = segment.tracing_result
                 for point in result:
                     if len(point) == 2:  # (y, x)
                         rows.append(
-                            ["N/A", point[1], point[0], prevIdx]
-                        )  # z, x, y, prevIdx
-                    else:
+                            # [idx, "", point[1], point[0], prevIdx] # idx, z, x, y, prevIdx
+                            [
+                                idx,
+                                point[1],
+                                point[0],
+                                "",
+                                prevIdx,
+                            ]  # idx, x, y, z, prevIdx
+                        )
+                    else:  # (z, y, x)
                         rows.append(
-                            [point[0], point[2], point[1], prevIdx]
-                        )  # z, x, y, prevIdx
+                            # [idx, point[0], point[2], point[1], prevIdx] # idx, z, x, y, prevIdx
+                            [
+                                idx,
+                                point[2],
+                                point[1],
+                                point[0],
+                                prevIdx,
+                            ]  # idx, x, y, z, prevIdx
+                        )
+
+                    idx += 1
                     prevIdx += 1
         return rows
 
@@ -755,7 +772,32 @@ class TracerWidget(QWidget):
                     self.active_tracing_result_layer = None
 
     def load_tracing(self) -> None:
-        pass
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Open Trace File", "", "CSV files (*.csv)"
+        )
+
+        if filename:
+            trace_loader = TraceLoader(filename)
+            trace_loader.load_trace()
+            terminal_points = trace_loader.terminal_points
+            tracing_result_points = trace_loader.tracing_result_points
+
+            logger.info(f"Terminal points: {terminal_points}")
+            logger.info(f"Tracing result points: {tracing_result_points}")
+            return
+
+            # 1.load points from SWC file first
+            self.plot_terminal_points(points=terminal_points)
+
+            # the below function call would then configure a tracing result layer
+            # and plot the brightest path from the SWC file
+            self.plot_brightest_path(points=tracing_result_points)
+
+    def plot_terminal_points(self, points: List[Tuple]) -> None:
+        # below call would create or set the terminal points layer
+        self._configure_terminal_points_layer()
+
+        # someway to plot these points into the active_terminal_points_layer
 
     def change_color(self, idx: int, color: np.array) -> None:
         """
