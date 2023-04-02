@@ -191,15 +191,6 @@ class TracerWidget(QWidget):
 
         main_layout.addWidget(self.available_img_layers_combo_box)
 
-        # algo_selection_layout = QVBoxLayout()
-        # algorithm_selection_combo_box = QComboBox(self)
-        # algorithm_selection_combo_box.addItem("A* Search")
-        # algorithm_selection_combo_box.addItem("NBA* Search")
-        # algorithm_selection_combo_box.activated[str].connect(
-        #     self.set_algorithm_for_tracing
-        # )
-        # algo_selection_layout.addWidget(algorithm_selection_combo_box)
-
         algo_and_mode_layout = QHBoxLayout()
         algorithm_selection_combo_box = QComboBox(self)
         algorithm_selection_combo_box.addItem("A* Search")
@@ -218,20 +209,27 @@ class TracerWidget(QWidget):
         # main_layout.addLayout(algo_selection_layout)
         main_layout.addLayout(algo_and_mode_layout)
 
-        button_layout = QHBoxLayout()
-        trace_button = QPushButton("Trace")
+        trace_button_layout = QHBoxLayout()
+        trace_button = QPushButton("Start Tracing")
         trace_button.clicked.connect(self.trace_brightest_path)
-        button_layout.addWidget(trace_button)
+        trace_button_layout.addWidget(trace_button)
 
-        cancel_button = QPushButton("Cancel")
+        cancel_button = QPushButton("Cancel Tracing")
         cancel_button.clicked.connect(self.cancel_tracing)
-        button_layout.addWidget(cancel_button)
+        trace_button_layout.addWidget(cancel_button)
 
+        save_and_load_button_layout = QHBoxLayout()
         save_trace_button = QPushButton("Save Trace")
         save_trace_button.clicked.connect(self.save_tracing)
-        button_layout.addWidget(save_trace_button)
+        save_and_load_button_layout.addWidget(save_trace_button)
 
-        main_layout.addLayout(button_layout)
+        load_button = QPushButton("Load Trace")
+        load_button.clicked.connect(self.load_tracing)
+        save_and_load_button_layout.addWidget(load_button)
+
+        main_layout.addLayout(trace_button_layout)
+        main_layout.addLayout(save_and_load_button_layout)
+
         self.setLayout(main_layout)
 
     def set_img_layer_for_tracing(self, img_layer_name: str):
@@ -755,6 +753,9 @@ class TracerWidget(QWidget):
                     )
                     self.active_tracing_result_layer_data = np.array([])
                     self.active_tracing_result_layer = None
+
+    def load_tracing(self) -> None:
+        pass
 
     def change_color(self, idx: int, color: np.array) -> None:
         """

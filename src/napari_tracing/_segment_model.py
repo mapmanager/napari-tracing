@@ -17,3 +17,10 @@ class Segment:
         self.goal_point = goal_point
         self.tracing_result = tracing_result
         self.tracing_algorithm = tracing_algorithm
+
+
+# class Tree:
+#     def __init__(self, node: Segment, left: Segment, right: Segment) -> None:
+#         self.node = node
+#         self.left = left
+#         self.right = right
