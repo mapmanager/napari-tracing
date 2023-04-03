@@ -105,7 +105,7 @@ class TracerWidget(QWidget):
 
         # algorithm choice for brightest path tracing
         self.tracing_algorithm_name = "A* Search"
-        self.tracing_mode = "Continuous Tracing Mode"
+        self.tracing_mode = "Disjoint Tracing Mode"
 
         # the result of the current tracing
         self.curr_traced_segment: Segment = None
@@ -202,8 +202,8 @@ class TracerWidget(QWidget):
         algo_and_mode_layout.addWidget(algorithm_selection_combo_box)
 
         mode_selection_combo_box = QComboBox(self)
-        mode_selection_combo_box.addItem("Continuous Tracing Mode")
         mode_selection_combo_box.addItem("Disjoint Tracing Mode")
+        mode_selection_combo_box.addItem("Continuous Tracing Mode")
         mode_selection_combo_box.activated[str].connect(self.set_tracing_mode)
         algo_and_mode_layout.addWidget(mode_selection_combo_box)
 
@@ -259,7 +259,7 @@ class TracerWidget(QWidget):
         # configure image layer after selection
         self._configure_terminal_points_layer()
 
-    def _configure_terminal_points_layer(self):
+    def _configure_terminal_points_layer(self, connect_to_events: bool = True):
         """
         configures properties of the image_layer that need to be
         tracked once its selected to be
@@ -292,9 +292,10 @@ class TracerWidget(QWidget):
         )
 
         # subscribing to data change in the terminal points layer
-        self.active_terminal_points_layer.events.data.connect(
-            self.slot_points_data_change
-        )
+        if connect_to_events:
+            self.active_terminal_points_layer.events.data.connect(
+                self.slot_points_data_change
+            )
 
     def set_algorithm_for_tracing(self, algo_name: str):
         logger.info(f"using {algo_name} as tracing algorithm")
@@ -548,19 +549,27 @@ class TracerWidget(QWidget):
             self.most_recent_segment_id[layer_id] = 0
         return self.most_recent_segment_id[layer_id]
 
-    def _save_traced_segment(self, result: List[np.ndarray]):
+    def _save_traced_segment(
+        self, result: List[np.ndarray], start_point=None, goal_point=None
+    ):
         """
         Saves a traced segment for an image layer the traced_segments
         dictionary
         """
+        if start_point is None:
+            start_point = self.start_point
+
+        if goal_point is None:
+            goal_point = self.goal_point
+
         segment_ID = self._get_segment_id()
         logger.info(
             f"Creating a tracing segment with segment_ID: {segment_ID}"
         )
         self.curr_traced_segment = Segment(
             segment_ID=segment_ID,
-            start_point=self.start_point,
-            goal_point=self.goal_point,
+            start_point=start_point,
+            goal_point=goal_point,
             tracing_result=result,
             tracing_algorithm=self.tracing_algorithm_name,
         )
@@ -604,7 +613,9 @@ class TracerWidget(QWidget):
         self.worker.returned.connect(self.plot_brightest_path)
         self.worker.start()
 
-    def plot_brightest_path(self, points: List[np.ndarray]):
+    def plot_brightest_path(
+        self, points: List[np.ndarray], prompt_to_save: bool = True
+    ):
         logger.info("Plotting brightest path...")
         image_layer_id = hash(self.active_image_layer)
         if image_layer_id in self.layer_mapping:
@@ -627,12 +638,16 @@ class TracerWidget(QWidget):
                 )
             self.active_tracing_result_layer.refresh()
 
-        self.accept_tracing_widget.show()
+        if prompt_to_save:
+            self.accept_tracing_widget.show()
 
-        logger.info(
-            f"Saved traces for {self.active_image_layer} \
-            are {self.traced_segments}"
-        )
+            logger.info(
+                f"Saved traces for {self.active_image_layer} \
+                are {self.traced_segments}"
+            )
+
+        # switch back to active terminal points layer as current layer
+        self.viewer.layers.current = self.active_terminal_points_layer
 
     def cancel_tracing(self):
         """Cancel brightest path tracing"""
@@ -782,22 +797,44 @@ class TracerWidget(QWidget):
             terminal_points = trace_loader.terminal_points
             tracing_result_points = trace_loader.tracing_result_points
 
-            logger.info(f"Terminal points: {terminal_points}")
-            logger.info(f"Tracing result points: {tracing_result_points}")
-            return
-
-            # 1.load points from SWC file first
+            # load points from SWC file first
             self.plot_terminal_points(points=terminal_points)
 
             # the below function call would then configure a tracing result layer
             # and plot the brightest path from the SWC file
-            self.plot_brightest_path(points=tracing_result_points)
+            self.plot_brightest_path(
+                points=tracing_result_points, prompt_to_save=False
+            )
+            self._reset_terminal_points()
+
+            for tracing_result in trace_loader.tracing_results:
+                self._save_traced_segment(
+                    result=tracing_result,
+                    start_point=tuple(tracing_result[0]),
+                    goal_point=tuple(tracing_result[-1]),
+                )
 
     def plot_terminal_points(self, points: List[Tuple]) -> None:
         # below call would create or set the terminal points layer
-        self._configure_terminal_points_layer()
+        self._configure_terminal_points_layer(connect_to_events=False)
+        for start_point, goal_point in points:
+            self.start_point = tuple(start_point)
+            self.active_terminal_points_layer._face.current_color = GREEN
+            self.active_terminal_points_layer.data = np.append(
+                self.active_terminal_points_layer.data, [start_point], axis=0
+            )
 
-        # someway to plot these points into the active_terminal_points_layer
+            self.goal_point = tuple(goal_point)
+            self.active_terminal_points_layer._face.current_color = RED
+            self.active_terminal_points_layer.data = np.append(
+                self.active_terminal_points_layer.data, [goal_point], axis=0
+            )
+
+        self.active_terminal_points_layer._face.current_color = GREEN
+        self.active_terminal_points_layer.refresh()
+        self.active_terminal_points_layer.events.data.connect(
+            self.slot_points_data_change
+        )
 
     def change_color(self, idx: int, color: np.array) -> None:
         """
