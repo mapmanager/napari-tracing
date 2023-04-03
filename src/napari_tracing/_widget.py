@@ -37,7 +37,7 @@ sys.path.append(
     "/Users/vasudhajha/Documents/mapmanager/brightest-path-lib/brightest_path_lib/algorithm"  # noqa
 )
 import warnings  # noqa
-from typing import Dict, List, Optional  # noqa
+from typing import Dict, List, Optional, Tuple  # noqa
 
 import napari  # noqa
 import numpy as np  # noqa
@@ -61,6 +61,7 @@ from ._dialog_widget import AcceptTracingWidget, SaveTracingWidget  # noqa
 from ._layer_model import TracingLayers  # noqa
 from ._logger import logger  # noqa
 from ._segment_model import Segment  # noqa
+from ._trace_loader import TraceLoader
 from .utils import Utils  # noqa
 
 RED = np.array([1, 0, 0, 1])
@@ -104,7 +105,7 @@ class TracerWidget(QWidget):
 
         # algorithm choice for brightest path tracing
         self.tracing_algorithm_name = "A* Search"
-        self.tracing_mode = "Continuous Tracing Mode"
+        self.tracing_mode = "Disjoint Tracing Mode"
 
         # the result of the current tracing
         self.curr_traced_segment: Segment = None
@@ -191,15 +192,6 @@ class TracerWidget(QWidget):
 
         main_layout.addWidget(self.available_img_layers_combo_box)
 
-        # algo_selection_layout = QVBoxLayout()
-        # algorithm_selection_combo_box = QComboBox(self)
-        # algorithm_selection_combo_box.addItem("A* Search")
-        # algorithm_selection_combo_box.addItem("NBA* Search")
-        # algorithm_selection_combo_box.activated[str].connect(
-        #     self.set_algorithm_for_tracing
-        # )
-        # algo_selection_layout.addWidget(algorithm_selection_combo_box)
-
         algo_and_mode_layout = QHBoxLayout()
         algorithm_selection_combo_box = QComboBox(self)
         algorithm_selection_combo_box.addItem("A* Search")
@@ -210,28 +202,35 @@ class TracerWidget(QWidget):
         algo_and_mode_layout.addWidget(algorithm_selection_combo_box)
 
         mode_selection_combo_box = QComboBox(self)
-        mode_selection_combo_box.addItem("Continuous Tracing Mode")
         mode_selection_combo_box.addItem("Disjoint Tracing Mode")
+        mode_selection_combo_box.addItem("Continuous Tracing Mode")
         mode_selection_combo_box.activated[str].connect(self.set_tracing_mode)
         algo_and_mode_layout.addWidget(mode_selection_combo_box)
 
         # main_layout.addLayout(algo_selection_layout)
         main_layout.addLayout(algo_and_mode_layout)
 
-        button_layout = QHBoxLayout()
-        trace_button = QPushButton("Trace")
+        trace_button_layout = QHBoxLayout()
+        trace_button = QPushButton("Start Tracing")
         trace_button.clicked.connect(self.trace_brightest_path)
-        button_layout.addWidget(trace_button)
+        trace_button_layout.addWidget(trace_button)
 
-        cancel_button = QPushButton("Cancel")
+        cancel_button = QPushButton("Cancel Tracing")
         cancel_button.clicked.connect(self.cancel_tracing)
-        button_layout.addWidget(cancel_button)
+        trace_button_layout.addWidget(cancel_button)
 
+        save_and_load_button_layout = QHBoxLayout()
         save_trace_button = QPushButton("Save Trace")
         save_trace_button.clicked.connect(self.save_tracing)
-        button_layout.addWidget(save_trace_button)
+        save_and_load_button_layout.addWidget(save_trace_button)
 
-        main_layout.addLayout(button_layout)
+        load_button = QPushButton("Load Trace")
+        load_button.clicked.connect(self.load_tracing)
+        save_and_load_button_layout.addWidget(load_button)
+
+        main_layout.addLayout(trace_button_layout)
+        main_layout.addLayout(save_and_load_button_layout)
+
         self.setLayout(main_layout)
 
     def set_img_layer_for_tracing(self, img_layer_name: str):
@@ -256,11 +255,11 @@ class TracerWidget(QWidget):
         logger.info(
             f"selected new image layer for tracing {self.active_image_layer}"
         )
-
+        self.active_image_layer_data = self.active_image_layer.data.copy()
         # configure image layer after selection
-        self._configure_layers_for_tracing()
+        self._configure_terminal_points_layer()
 
-    def _configure_layers_for_tracing(self):
+    def _configure_terminal_points_layer(self, connect_to_events: bool = True):
         """
         configures properties of the image_layer that need to be
         tracked once its selected to be
@@ -288,15 +287,15 @@ class TracerWidget(QWidget):
             self.layer_mapping[layer_id] = tracing_layers
 
         # Copy the active layers data. We will use it later on for tracing
-        self.active_image_layer_data = self.active_image_layer.data.copy()
         self.active_terminal_points_layer_data = (
             self.active_terminal_points_layer.data.copy()
         )
 
         # subscribing to data change in the terminal points layer
-        self.active_terminal_points_layer.events.data.connect(
-            self.slot_points_data_change
-        )
+        if connect_to_events:
+            self.active_terminal_points_layer.events.data.connect(
+                self.slot_points_data_change
+            )
 
     def set_algorithm_for_tracing(self, algo_name: str):
         logger.info(f"using {algo_name} as tracing algorithm")
@@ -550,19 +549,27 @@ class TracerWidget(QWidget):
             self.most_recent_segment_id[layer_id] = 0
         return self.most_recent_segment_id[layer_id]
 
-    def _save_traced_segment(self, result: List[np.ndarray]):
+    def _save_traced_segment(
+        self, result: List[np.ndarray], start_point=None, goal_point=None
+    ):
         """
         Saves a traced segment for an image layer the traced_segments
         dictionary
         """
+        if start_point is None:
+            start_point = self.start_point
+
+        if goal_point is None:
+            goal_point = self.goal_point
+
         segment_ID = self._get_segment_id()
         logger.info(
             f"Creating a tracing segment with segment_ID: {segment_ID}"
         )
         self.curr_traced_segment = Segment(
             segment_ID=segment_ID,
-            start_point=self.start_point,
-            goal_point=self.goal_point,
+            start_point=start_point,
+            goal_point=goal_point,
             tracing_result=result,
             tracing_algorithm=self.tracing_algorithm_name,
         )
@@ -606,7 +613,9 @@ class TracerWidget(QWidget):
         self.worker.returned.connect(self.plot_brightest_path)
         self.worker.start()
 
-    def plot_brightest_path(self, points: List[np.ndarray]):
+    def plot_brightest_path(
+        self, points: List[np.ndarray], prompt_to_save: bool = True
+    ):
         logger.info("Plotting brightest path...")
         image_layer_id = hash(self.active_image_layer)
         if image_layer_id in self.layer_mapping:
@@ -629,12 +638,16 @@ class TracerWidget(QWidget):
                 )
             self.active_tracing_result_layer.refresh()
 
-        self.accept_tracing_widget.show()
+        if prompt_to_save:
+            self.accept_tracing_widget.show()
 
-        logger.info(
-            f"Saved traces for {self.active_image_layer} \
-            are {self.traced_segments}"
-        )
+            logger.info(
+                f"Saved traces for {self.active_image_layer} \
+                are {self.traced_segments}"
+            )
+
+        # switch back to active terminal points layer as current layer
+        self.viewer.layers.current = self.active_terminal_points_layer
 
     def cancel_tracing(self):
         """Cancel brightest path tracing"""
@@ -671,7 +684,7 @@ class TracerWidget(QWidget):
             logger.info(f"Saving file as {fileName[0]}")
             with open(fileName[0], "w") as f:
                 writer = csv.writer(f)
-                column_headers = ["z", "x", "y", "prevIdx"]
+                column_headers = ["idx", "x", "y", "z", "prevIdx"]
                 writer.writerow(column_headers)
                 for row in self._get_row_values_for_saving_trace():
                     writer.writerow(row)
@@ -681,18 +694,35 @@ class TracerWidget(QWidget):
 
         active_layer_id = hash(self.active_image_layer)
         if active_layer_id in self.traced_segments:
+            idx = 0
             for segment in self.traced_segments[active_layer_id]:
                 prevIdx = -1
                 result = segment.tracing_result
                 for point in result:
                     if len(point) == 2:  # (y, x)
                         rows.append(
-                            ["N/A", point[1], point[0], prevIdx]
-                        )  # z, x, y, prevIdx
-                    else:
+                            # [idx, "", point[1], point[0], prevIdx] # idx, z, x, y, prevIdx
+                            [
+                                idx,
+                                point[1],
+                                point[0],
+                                "",
+                                prevIdx,
+                            ]  # idx, x, y, z, prevIdx
+                        )
+                    else:  # (z, y, x)
                         rows.append(
-                            [point[0], point[2], point[1], prevIdx]
-                        )  # z, x, y, prevIdx
+                            # [idx, point[0], point[2], point[1], prevIdx] # idx, z, x, y, prevIdx
+                            [
+                                idx,
+                                point[2],
+                                point[1],
+                                point[0],
+                                prevIdx,
+                            ]  # idx, x, y, z, prevIdx
+                        )
+
+                    idx += 1
                     prevIdx += 1
         return rows
 
@@ -755,6 +785,56 @@ class TracerWidget(QWidget):
                     )
                     self.active_tracing_result_layer_data = np.array([])
                     self.active_tracing_result_layer = None
+
+    def load_tracing(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Open Trace File", "", "CSV files (*.csv)"
+        )
+
+        if filename:
+            trace_loader = TraceLoader(filename)
+            trace_loader.load_trace()
+            terminal_points = trace_loader.terminal_points
+            tracing_result_points = trace_loader.tracing_result_points
+
+            # load points from SWC file first
+            self.plot_terminal_points(points=terminal_points)
+
+            # the below function call would then configure a tracing result layer
+            # and plot the brightest path from the SWC file
+            self.plot_brightest_path(
+                points=tracing_result_points, prompt_to_save=False
+            )
+            self._reset_terminal_points()
+
+            for tracing_result in trace_loader.tracing_results:
+                self._save_traced_segment(
+                    result=tracing_result,
+                    start_point=tuple(tracing_result[0]),
+                    goal_point=tuple(tracing_result[-1]),
+                )
+
+    def plot_terminal_points(self, points: List[Tuple]) -> None:
+        # below call would create or set the terminal points layer
+        self._configure_terminal_points_layer(connect_to_events=False)
+        for start_point, goal_point in points:
+            self.start_point = tuple(start_point)
+            self.active_terminal_points_layer._face.current_color = GREEN
+            self.active_terminal_points_layer.data = np.append(
+                self.active_terminal_points_layer.data, [start_point], axis=0
+            )
+
+            self.goal_point = tuple(goal_point)
+            self.active_terminal_points_layer._face.current_color = RED
+            self.active_terminal_points_layer.data = np.append(
+                self.active_terminal_points_layer.data, [goal_point], axis=0
+            )
+
+        self.active_terminal_points_layer._face.current_color = GREEN
+        self.active_terminal_points_layer.refresh()
+        self.active_terminal_points_layer.events.data.connect(
+            self.slot_points_data_change
+        )
 
     def change_color(self, idx: int, color: np.array) -> None:
         """
