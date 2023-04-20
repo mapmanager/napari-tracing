@@ -3,10 +3,10 @@
 TODO:
 Features:
 0. Disable trace button initially if only 1 point is selected
-1. Add a mode:
+1. Add a mode: -> DONE
     1. Continuous mode: continuing on the same disjoint segment
         - prev goal becomes the new start if there are already two points
-2. accept or reject tracing
+2. accept or reject tracing -> DONE
     Do this after you create a tracing.
     1. if tracing is rejected:
         - if a tracing layer already exists for other tracings in the same
@@ -15,33 +15,22 @@ Features:
           it for this tracing, then removing the tracing layer itself.
     2. if tracing is accepted, do nothing. don't save path in the CSV yet
        until save trace is clicked
-3. Load:
+3. Load: -> Done
     - load swc to populate the answer to the tracing on load
     - disjoint tracing into runtime variables interactively
 4. Visualization for tracing:
     - Not sure how to do this
-5. Change layer selection to terminal points layer after tracing is drawn
+5. Change layer selection to terminal points layer after tracing is drawn -> Bug in UI
 GUI related:
 - Read point size (for path width) from a textbox?
 - Read trace path color and size from input
 - restore edge color and point size after plotting complete to prev color/size
 """
-import csv
-import sys
-
-sys.path.append("/Users/vasudhajha/Documents/mapmanager/brightest-path-lib")
-sys.path.append(
-    "/Users/vasudhajha/Documents/mapmanager/brightest-path-lib/brightest_path_lib"  # noqa
-)
-sys.path.append(
-    "/Users/vasudhajha/Documents/mapmanager/brightest-path-lib/brightest_path_lib/algorithm"  # noqa
-)
 import warnings  # noqa
 from typing import Dict, List, Optional, Tuple  # noqa
 
 import napari  # noqa
 import numpy as np  # noqa
-from algorithm import AStarSearch, NBAStarSearch  # noqa
 from brightest_path_lib.algorithm import AStarSearch, NBAStarSearch  # noqa
 from napari.layers import Layer  # noqa
 from napari.qt.threading import thread_worker  # noqa
@@ -62,6 +51,7 @@ from ._layer_model import TracingLayers  # noqa
 from ._logger import logger  # noqa
 from ._segment_model import Segment  # noqa
 from ._trace_loader import TraceLoader
+from ._trace_saver import TraceSaver
 from .utils import Utils  # noqa
 
 RED = np.array([1, 0, 0, 1])
@@ -270,9 +260,22 @@ class TracerWidget(QWidget):
         layer_id = hash(self.active_image_layer)
         if layer_id in self.layer_mapping:
             tracing_layers = self.layer_mapping[layer_id]
-            self.active_terminal_points_layer = (
-                tracing_layers.terminal_points_layer
-            )
+            if tracing_layers.terminal_points_layer is None:
+                terminal_layer_name = (
+                    self.active_image_layer.name + "_terminal_points_layer"
+                )
+                self.active_terminal_points_layer = self.viewer.add_points(
+                    name=terminal_layer_name
+                )
+                tracing_layers = TracingLayers()
+                tracing_layers.terminal_points_layer = (
+                    self.active_terminal_points_layer
+                )
+                self.layer_mapping[layer_id] = tracing_layers
+            else:
+                self.active_terminal_points_layer = (
+                    tracing_layers.terminal_points_layer
+                )
         else:
             terminal_layer_name = (
                 self.active_image_layer.name + "_terminal_points_layer"
@@ -682,12 +685,11 @@ class TracerWidget(QWidget):
         )
         if fileName:
             logger.info(f"Saving file as {fileName[0]}")
-            with open(fileName[0], "w") as f:
-                writer = csv.writer(f)
-                column_headers = ["idx", "x", "y", "z", "prevIdx"]
-                writer.writerow(column_headers)
-                for row in self._get_row_values_for_saving_trace():
-                    writer.writerow(row)
+            active_layer_id = hash(self.active_image_layer)
+            if active_layer_id in self.traced_segments:
+                segments = self.traced_segments[active_layer_id]
+                trace_saver = TraceSaver(fileName[0], segments)
+                trace_saver.save_trace()
 
     def _get_row_values_for_saving_trace(self) -> List:
         rows = []
