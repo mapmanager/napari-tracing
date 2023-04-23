@@ -1,0 +1,17 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-on-push:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: rymndhng/release-on-push-action@master
+        with:
+          bump_version_scheme: major # can be either "major", "minor", "patch" or "norelease"
+          tag_prefix: v
