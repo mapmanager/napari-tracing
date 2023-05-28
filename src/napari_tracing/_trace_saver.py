@@ -1,6 +1,7 @@
 import csv
 from typing import List
 
+from ._logger import logger  # noqa
 from ._segment_model import Segment
 
 
@@ -8,6 +9,7 @@ class TraceSaver:
     def __init__(self, filename: str, segments: List[Segment]) -> None:
         self.filename = filename
         self.segments = segments
+        self.segment_ids_added = set()
 
     def save_trace(self):
         with open(self.filename, "w") as f:
@@ -22,37 +24,78 @@ class TraceSaver:
         idx = 0
         merged_segments = self._merge_segments()
         for segment in merged_segments:
+            if segment.segment_ID in self.segment_ids_added:
+                continue
+
             prevIdx = -1
-            result = segment.tracing_result
-            for point in result:
+            for point in segment.tracing_result:
                 if len(point) == 2:  # (y, x)
                     rows.append(
-                        # idx, z, x, y, prevIdx
+                        # idx, x, y, z, prevIdx
                         [
                             idx,
                             point[1],
                             point[0],
                             "",
                             prevIdx,
-                        ]  # idx, x, y, z, prevIdx
+                        ]
                     )
                 else:  # (z, y, x)
                     rows.append(
-                        # idx, z, x, y, prevIdx
+                        # idx, x, y, z, prevIdx
                         [
                             idx,
                             point[2],
                             point[1],
                             point[0],
                             prevIdx,
-                        ]  # idx, x, y, z, prevIdx
+                        ]
                     )
 
                 idx += 1
                 prevIdx += 1
+
+            self.segment_ids_added.add(segment.segment_ID)
+
+            for child in segment.children:
+                if child.segment_ID in self.segment_ids_added:
+                    continue
+
+                prevIdx = self._find_prevIdx(child, rows)
+                logger.info(f"prefIdx: {prevIdx}")
+
+                for point in child.tracing_result[1:]:
+                    if len(point) == 2:  # (y, x)
+                        rows.append(
+                            # idx, z, x, y, prevIdx
+                            [
+                                idx,
+                                point[1],
+                                point[0],
+                                "",
+                                prevIdx,
+                            ]  # idx, x, y, z, prevIdx
+                        )
+                    else:  # (z, y, x)
+                        rows.append(
+                            # idx, z, x, y, prevIdx
+                            [
+                                idx,
+                                point[2],
+                                point[1],
+                                point[0],
+                                prevIdx,
+                            ]  # idx, x, y, z, prevIdx
+                        )
+
+                    idx += 1
+                    prevIdx += 1
+
+                self.segment_ids_added.add(child.segment_ID)
+
         return rows
 
-    def _merge_segments(self) -> List:
+    def _merge_segments(self) -> List["Segment"]:
         """
         1. Merges segments that form a continuous tracing
         (like A->B, B->C merged into A->C)
@@ -85,6 +128,7 @@ class TraceSaver:
                     start_point=prev_start,
                     goal_point=curr_goal,
                     tracing_result=extended_tracing_result,
+                    children=prev_segment.children + curr_segment.children,
                 )
                 merged_segments[
                     -1
@@ -102,3 +146,21 @@ class TraceSaver:
                 prev_goal = curr_goal
 
         return merged_segments
+
+    def _find_prevIdx(self, child: Segment, rows: List[List]) -> int:
+        start_point = child.start_point
+        # logger.info(f"start_point: {start_point}")
+        for row in rows:
+            if len(start_point) == 2:
+                # logger.info(f"Start point matches {row[1], row[2]}?")
+                if row[1] == start_point[1] and row[2] == start_point[0]:
+                    # logger.info("Match found")
+                    return row[0]
+
+            if len(start_point) == 3:
+                if (
+                    row[1] == start_point[2]
+                    and row[2] == start_point[1]
+                    and row[3] == start_point[0]
+                ):
+                    return row[0]

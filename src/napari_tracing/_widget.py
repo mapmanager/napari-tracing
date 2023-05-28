@@ -632,10 +632,11 @@ class TracerWidget(QWidget):
                     )
                     break
 
-            parent_segment.add_child(self.curr_traced_segment)
-            logger.info(
-                "Added the current traced segment as a child of the parent segment"
-            )
+            if parent_segment:
+                parent_segment.add_child(self.curr_traced_segment)
+                logger.info(
+                    "Added the current traced segment as a child of the parent segment"
+                )
 
         # Add all points from segment's tracing_result to coordinate_segment_mapping
         for point in self.curr_traced_segment.tracing_result:
@@ -880,7 +881,6 @@ class TracerWidget(QWidget):
             self._reset_terminal_points()
 
             for tracing_result in trace_loader.tracing_results:
-                tracing_result = tracing_result.astype(int)
                 self._save_traced_segment(
                     result=tracing_result,
                     start_point=tuple(tracing_result[0]),
