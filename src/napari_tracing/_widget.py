@@ -61,6 +61,9 @@ BLACK = np.array([0, 0, 0, 1])
 PURPLE = np.array([0.5, 0, 0.5, 1])
 ORANGE = np.array([1, 0.65, 0, 1])
 TURQUOISE = np.array([0.25, 0.88, 0.82, 1])
+DISJOINT_TRACING_MODE = "Disjoint Tracing Mode"
+CONTINUOUS_TRACING_MODE = "Continuous Tracing Mode"
+BRANCH_TRACING_MODE = "Branch Tracing Mode"
 
 
 class TracerWidget(QWidget):
@@ -95,7 +98,7 @@ class TracerWidget(QWidget):
 
         # algorithm choice for brightest path tracing
         self.tracing_algorithm_name = "A* Search"
-        self.tracing_mode = "Disjoint Tracing Mode"
+        self.tracing_mode = DISJOINT_TRACING_MODE
 
         # the result of the current tracing
         self.curr_traced_segment: Segment = None
@@ -108,6 +111,18 @@ class TracerWidget(QWidget):
         # maps the active image_layer hash/id
         # to a list of tracings for that layer
         self.traced_segments: Dict[int : List[Segment]] = {}  # noqa
+
+        # maps the image layer hash/id to a dict of point - segment ids
+        # Example entry:
+        # {
+        #   12345 : {
+        #               (10, 100) : [1, 4],
+        #               (11, 101) : [1]
+        #           }
+        # }
+        self.coordinate_segment_mapping: Dict[
+            int : Dict[Tuple : List[int]]
+        ] = {}  # noqa
 
         # maps a layer id to its most recent segment value
         self.most_recent_segment_id: Dict[int:int] = {}
@@ -192,8 +207,9 @@ class TracerWidget(QWidget):
         algo_and_mode_layout.addWidget(algorithm_selection_combo_box)
 
         mode_selection_combo_box = QComboBox(self)
-        mode_selection_combo_box.addItem("Disjoint Tracing Mode")
-        mode_selection_combo_box.addItem("Continuous Tracing Mode")
+        mode_selection_combo_box.addItem(DISJOINT_TRACING_MODE)
+        mode_selection_combo_box.addItem(CONTINUOUS_TRACING_MODE)
+        mode_selection_combo_box.addItem(BRANCH_TRACING_MODE)
         mode_selection_combo_box.activated[str].connect(self.set_tracing_mode)
         algo_and_mode_layout.addWidget(mode_selection_combo_box)
 
@@ -337,6 +353,9 @@ class TracerWidget(QWidget):
         if image_layer_id in self.most_recent_segment_id:
             del self.most_recent_segment_id[image_layer_id]
 
+        if image_layer_id in self.coordinate_segment_mapping:
+            del self.coordinate_segment_mapping[image_layer_id]
+
     def _reset_active_image_layer(self):
         if self.active_terminal_points_layer is not None:
             logger.info("Removing terminal points layer from viewer")
@@ -473,6 +492,7 @@ class TracerWidget(QWidget):
             idx, points = Utils.get_diff(
                 event.source.data, self.active_terminal_points_layer_data
             )
+            points = points.astype(int)
             # point = tuple(map(int, tuple(point[0])))
             point = tuple(points[0])
 
@@ -581,6 +601,56 @@ class TracerWidget(QWidget):
         layer_id = hash(self.active_image_layer)
         logger.info("saving tracing for " + f"layer id {layer_id}")
 
+        if layer_id not in self.coordinate_segment_mapping:
+            self.coordinate_segment_mapping[layer_id] = {}
+
+        # if mode is branch tracing mode, then check if the start_point lies
+        # in the tracing result of an existing segment.
+        # If yes, then add this segment to the children of the existing one.
+        is_branched_segment = False
+        parent_segment_id = -1
+        parent_segment = None
+        if self.tracing_mode == BRANCH_TRACING_MODE:
+            logger.info(
+                "Checking if the current traced segment is a branch of an existing segment"
+            )
+            if start_point in self.coordinate_segment_mapping[layer_id]:
+                is_branched_segment = True
+                parent_segment_id = self.coordinate_segment_mapping[layer_id][
+                    start_point
+                ][0]
+                logger.info(
+                    f"Found the current traced segment to be a branch of an existing segment with id {parent_segment_id}"
+                )
+
+        if is_branched_segment:
+            for segment in self.traced_segments[layer_id]:
+                if parent_segment_id == segment.segment_ID:
+                    parent_segment = segment
+                    logger.info(
+                        f"Found the parent segment having id {parent_segment_id}"
+                    )
+                    break
+
+            parent_segment.add_child(self.curr_traced_segment)
+            logger.info(
+                "Added the current traced segment as a child of the parent segment"
+            )
+
+        # Add all points from segment's tracing_result to coordinate_segment_mapping
+        for point in self.curr_traced_segment.tracing_result:
+            key = tuple(point.astype(int))
+            if key in self.coordinate_segment_mapping[layer_id]:
+                # value = self.coordinate_segment_mapping[layer_id][key]
+                # self.coordinate_segment_mapping[layer_id][key] = value + self.curr_traced_segment.segment_ID
+                self.coordinate_segment_mapping[layer_id][key].append(
+                    self.curr_traced_segment.segment_ID
+                )
+            else:
+                self.coordinate_segment_mapping[layer_id][key] = [
+                    self.curr_traced_segment.segment_ID
+                ]
+
         if layer_id in self.traced_segments:
             self.traced_segments[layer_id].append(self.curr_traced_segment)
         else:
@@ -591,7 +661,7 @@ class TracerWidget(QWidget):
         logger.info(
             f"Resetting terminal points based on the {self.tracing_mode}"
         )
-        if self.tracing_mode == "Disjoint Tracing Mode":
+        if self.tracing_mode in [DISJOINT_TRACING_MODE, BRANCH_TRACING_MODE]:
             self.start_point = None
         else:
             self.start_point = self.goal_point
@@ -600,7 +670,7 @@ class TracerWidget(QWidget):
                 layer_data=self.active_terminal_points_layer_data,
             )
             logger.info(f"found idx {idx} for goal point")
-            logger.info("Changing the idx color to orange")
+            logger.info("Changing the idx color to green")
             self.change_color(idx, GREEN)
             # get the index of the point layer in the terminal points layer data,
             # change its color to orange
@@ -810,6 +880,7 @@ class TracerWidget(QWidget):
             self._reset_terminal_points()
 
             for tracing_result in trace_loader.tracing_results:
+                tracing_result = tracing_result.astype(int)
                 self._save_traced_segment(
                     result=tracing_result,
                     start_point=tuple(tracing_result[0]),
