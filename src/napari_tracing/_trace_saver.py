@@ -1,97 +1,110 @@
-import csv
+import os
 from typing import List
 
 from ._logger import logger  # noqa
 from ._segment_model import Segment
 
+TYPE = 1
+RADIUS = 1
+
 
 class TraceSaver:
-    def __init__(self, filename: str, segments: List[Segment]) -> None:
-        self.filename = filename
+    def __init__(
+        self, directory: str, layer_name: str, segments: List[Segment]
+    ) -> None:
+        self.directory = directory
+        self.layer_name = layer_name
         self.segments = segments
         self.segment_ids_added = set()
 
     def save_trace(self):
-        with open(self.filename, "w") as f:
-            writer = csv.writer(f)
-            column_headers = ["idx", "x", "y", "z", "prevIdx"]
-            writer.writerow(column_headers)
-            for row in self._get_row_values_for_saving_trace():
-                writer.writerow(row)
-
-    def _get_row_values_for_saving_trace(self) -> List:
-        rows = []
-        idx = 0
         merged_segments = self._merge_segments()
         for segment in merged_segments:
-            if segment.segment_ID in self.segment_ids_added:
+            file_path = os.path.join(
+                self.directory, f"{self.layer_name}_{segment.segment_ID}.swc"
+            )
+            with open(file_path, "w") as f:
+                # column_headers: idx, type, x, y, z, radius, prevIdx
+                for row in self._get_row_values_for_saving_trace(segment):
+                    f.write(" ".join(str(element) for element in row))
+                    f.write("\n")
+
+    def _get_row_values_for_saving_trace(self, segment: "Segment") -> List:
+        rows = []
+        idx = 0
+
+        if segment.segment_ID in self.segment_ids_added:
+            return
+
+        prevIdx = -1
+        for point in segment.tracing_result:
+            if len(point) == 2:  # (y, x)
+                rows.append(
+                    # idx, type, x, y, z, radius, prevIdx
+                    [
+                        idx,
+                        TYPE,
+                        point[1],
+                        point[0],
+                        "",
+                        RADIUS,
+                        prevIdx,
+                    ]
+                )
+            else:  # (z, y, x)
+                rows.append(
+                    # idx, type, x, y, z, radius, prevIdx
+                    [
+                        idx,
+                        TYPE,
+                        point[2],
+                        point[1],
+                        point[0],
+                        RADIUS,
+                        prevIdx,
+                    ]
+                )
+
+            idx += 1
+            prevIdx += 1
+
+        self.segment_ids_added.add(segment.segment_ID)
+
+        for child in segment.children:
+            if child.segment_ID in self.segment_ids_added:
                 continue
 
-            prevIdx = -1
-            for point in segment.tracing_result:
+            prevIdx = self._find_prevIdx(child, rows)
+            logger.info(f"prefIdx: {prevIdx}")
+
+            for point in child.tracing_result[1:]:
                 if len(point) == 2:  # (y, x)
                     rows.append(
-                        # idx, x, y, z, prevIdx
+                        # idx, z, x, y, prevIdx
                         [
                             idx,
                             point[1],
                             point[0],
                             "",
                             prevIdx,
-                        ]
+                        ]  # idx, x, y, z, prevIdx
                     )
                 else:  # (z, y, x)
                     rows.append(
-                        # idx, x, y, z, prevIdx
+                        # idx, z, x, y, prevIdx
                         [
                             idx,
                             point[2],
                             point[1],
                             point[0],
                             prevIdx,
-                        ]
+                        ]  # idx, x, y, z, prevIdx
                     )
 
                 idx += 1
                 prevIdx += 1
 
-            self.segment_ids_added.add(segment.segment_ID)
-
-            for child in segment.children:
-                if child.segment_ID in self.segment_ids_added:
-                    continue
-
-                prevIdx = self._find_prevIdx(child, rows)
-                logger.info(f"prefIdx: {prevIdx}")
-
-                for point in child.tracing_result[1:]:
-                    if len(point) == 2:  # (y, x)
-                        rows.append(
-                            # idx, z, x, y, prevIdx
-                            [
-                                idx,
-                                point[1],
-                                point[0],
-                                "",
-                                prevIdx,
-                            ]  # idx, x, y, z, prevIdx
-                        )
-                    else:  # (z, y, x)
-                        rows.append(
-                            # idx, z, x, y, prevIdx
-                            [
-                                idx,
-                                point[2],
-                                point[1],
-                                point[0],
-                                prevIdx,
-                            ]  # idx, x, y, z, prevIdx
-                        )
-
-                    idx += 1
-                    prevIdx += 1
-
-                self.segment_ids_added.add(child.segment_ID)
+            self.segment_ids_added.add(child.segment_ID)
 
         return rows
 

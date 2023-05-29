@@ -748,18 +748,27 @@ class TracerWidget(QWidget):
 
         logger.info("Saving tracing...")
 
-        fileName = QFileDialog.getSaveFileName(
+        # fileName = QFileDialog.getSaveFileName(
+        #     self,
+        #     "Save Tracing As",
+        #     self.active_tracing_result_layer.name,
+        #     filter="*.csv",
+        # )
+        # if fileName:
+        directory = QFileDialog.getExistingDirectory(
             self,
-            "Save Tracing As",
+            "Select or Create Directory",
             self.active_tracing_result_layer.name,
-            filter="*.csv",
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
         )
-        if fileName:
-            logger.info(f"Saving file as {fileName[0]}")
+        if directory:
+            logger.info(f"Saving tracing in directory {directory}")
             active_layer_id = hash(self.active_image_layer)
             if active_layer_id in self.traced_segments:
                 segments = self.traced_segments[active_layer_id]
-                trace_saver = TraceSaver(fileName[0], segments)
+                trace_saver = TraceSaver(
+                    directory, self.active_tracing_result_layer.name, segments
+                )
                 trace_saver.save_trace()
 
     def _get_row_values_for_saving_trace(self) -> List:
@@ -861,7 +870,7 @@ class TracerWidget(QWidget):
 
     def load_tracing(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Open Trace File", "", "CSV files (*.csv)"
+            self, "Open Trace File", "", "SWC files (*.swc)"
         )
 
         if filename:

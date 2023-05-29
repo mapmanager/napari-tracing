@@ -1,4 +1,3 @@
-import csv
 from typing import List, Tuple
 
 import numpy as np
@@ -20,13 +19,15 @@ class TraceLoader:
 
     def load_trace(self) -> None:
         with open(self.filename) as file:
-            reader = csv.reader(file)
-            next(reader)  # skip the header row
             tracing_result = []
-
-            for string_row in reader:  # row format: idx, x, y, z, prevIdx
+            rows = file.readlines()
+            for (
+                string_row
+            ) in rows:  # row format: idx type x y z radius prevIdx
                 row = [
-                    int(element) for element in string_row if len(element) > 0
+                    int(element)
+                    for element in string_row.split()
+                    if len(element) > 0
                 ]
                 point = self._get_point(row)
                 self.tracing_result_points.append(point)
@@ -70,11 +71,11 @@ class TraceLoader:
             self.tracing_results.append(tracing_result)
 
     def _get_point(self, row: List[str]) -> np.ndarray:
-        if (
-            len(row) == 4
-        ):  # 2D because we only have columns idx, x, y and prevIdx
-            point = np.array([row[2], row[1]])  # (y,x)
+        if len(row) == 6:
+            # 2D because we only have these columns:
+            # idx, type, x, y, radius and prevIdx
+            point = np.array([row[3], row[2]])  # (y,x)
         else:
-            point = np.array([row[3], row[2], row[1]])  # (z,y,x)
+            point = np.array([row[4], row[3], row[2]])  # (z,y,x)
 
         return point
