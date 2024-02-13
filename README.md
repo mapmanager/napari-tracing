@@ -13,11 +13,12 @@ The `Napari Tracer Plugin` provides an intuitive interface for users to load ima
 
 ## Examples
 
-<video loop muted autoplay controls >
+<video loop muted autoplay controls>
   <source src="data/sample-2d-tracing.mp4" type="video/mp4">
+  Your browser could not display data/sample-2d-tracing.mp4
 </video>
 
-You can download our [2D](data/sample-2d.tif) and [3D](sample-3d.tif) example tif files.
+You can download our <A HREF="https://github.com/mapmanager/napari-tracing/raw/main/data/sample-2d.tif">2D</A> and <A HREF="https://github.com/mapmanager/napari-tracing/raw/main/data/sample-3d.tif">3D</A> example tif files.
 
 ## Features
 
