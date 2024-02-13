@@ -14,7 +14,7 @@ The `Napari Tracer Plugin` provides an intuitive interface for users to load ima
 ## Examples
 
 <video loop muted autoplay controls >
-  <source src="sample-2d-tracing.mp4" type="video/mp4">
+  <source src="data/sample-2d-tracing.mp4" type="video/mp4">
 </video>
 
 You can download our [2D](data/sample-2d.tif) and [3D](sample-3d.tif) example tif files.
