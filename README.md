@@ -14,7 +14,7 @@ The `Napari Tracer Plugin` provides an intuitive interface for users to load ima
 ## Examples
 
 <video loop muted autoplay controls>
-  <source src="data/sample-2d-tracing.mp4" type="video/mp4">
+  <source src="https://github.com/mapmanager/napari-tracing/raw/main/data/sample-2d-tracing.mp4" type="video/mp4">
   Your browser could not display data/sample-2d-tracing.mp4
 </video>
 
