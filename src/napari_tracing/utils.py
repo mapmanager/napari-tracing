@@ -29,6 +29,10 @@ class Utils:
         - Get difference between two dataframes
         - this method assumes layer1_data is larger than layer2_data
         """
+
+        # logger.info(f'layer1_data:{layer1_data}')
+        # logger.info(f'layer2_data:{layer2_data}')
+        
         ptr1, ptr2 = 0, 0
         differing_indices = []
         diff_data = []

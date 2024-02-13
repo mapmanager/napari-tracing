@@ -11,6 +11,14 @@
 
 The `Napari Tracer Plugin` provides an intuitive interface for users to load images, perform brightest path tracing, and visualize the results. This plugin, which is built on top of the Napari viewer, enables users to explore and annotate complex images, and take advantage of the viewer's built-in features such as zooming, panning, and adjusting contrast while viewing their tracings. The `Napari Tracer Plugin` uses the brightest path tracing algorithms from [brightest-path-lib](https://github.com/mapmanager/brightest-path-lib) to provide an interactive path building process for users to create traced segments in 2D and 3D images.
 
+## Examples
+
+<video loop muted autoplay controls >
+  <source src="sample-2d-tracing.mp4" type="video/mp4">
+</video>
+
+You can download our [2D](data/sample-2d.tif) and [3D](sample-3d.tif) example tif files.
+
 ## Features
 
 1. Load images and trace paths in 2D and 3D.
@@ -22,7 +30,7 @@ The `Napari Tracer Plugin` provides an intuitive interface for users to load ima
 
 ## Installation
 
-You can install `napari-tracing` via [pip]:
+You can install `napari-tracing` via pip:
 
     pip install napari-tracing
 

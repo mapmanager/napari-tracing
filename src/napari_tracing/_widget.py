@@ -271,6 +271,8 @@ class TracerWidget(QWidget):
         tracked once its selected to be
         used for tracing
         """
+
+        logger.info(f'active_image_layer ndim is:{self.active_image_layer.ndim}')
         # first check if the image layer and its corresponding tracing
         # and results objects already exist
         layer_id = hash(self.active_image_layer)
@@ -281,6 +283,7 @@ class TracerWidget(QWidget):
                     self.active_image_layer.name + "_terminal_points_layer"
                 )
                 self.active_terminal_points_layer = self.viewer.add_points(
+                    ndim=self.active_image_layer.ndim,
                     name=terminal_layer_name
                 )
                 tracing_layers = TracingLayers()
@@ -297,6 +300,7 @@ class TracerWidget(QWidget):
                 self.active_image_layer.name + "_terminal_points_layer"
             )
             self.active_terminal_points_layer = self.viewer.add_points(
+                ndim=self.active_image_layer.ndim,
                 name=terminal_layer_name
             )
             tracing_layers = TracingLayers()
@@ -475,7 +479,16 @@ class TracerWidget(QWidget):
         Modify the start/end points for a* search
         based on point adding/deletion
         """
+        
+        # abb 202401
+        # connect to
+        #  viewer.dims.events.current_step
+        # need viewer.dims.current_step
+        # slot_points_data_change
+
         logger.info("Inside slot_points_data_change")
+        logger.info(f'event:{event.type}')
+
         if event.source != self.active_terminal_points_layer:
             return
 
@@ -492,6 +505,9 @@ class TracerWidget(QWidget):
             idx, points = Utils.get_diff(
                 event.source.data, self.active_terminal_points_layer_data
             )
+            
+            logger.info(f'idx:{idx} points:{points}')
+
             points = points.astype(int)
             # point = tuple(map(int, tuple(point[0])))
             point = tuple(points[0])
